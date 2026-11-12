@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DwarFS Utility
+GenericName=DwarFS Image Manager
+Comment=Create, inspect, mount, and extract DwarFS images
+Exec=dwarfsctl-manager %F
+Icon=dwarfsctl
+Terminal=false
+Categories=Qt;KDE;Utility;FileTools;
+MimeType=application/x-dwarfs;application/x-dwarfs-image;
+StartupNotify=true

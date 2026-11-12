@@ -1,0 +1,9 @@
+ARG BASE=registry.fedoraproject.org/fedora:45
+FROM ${BASE}
+RUN dnf install -y gcc-c++ cmake ninja-build pkgconf-pkg-config python3 curl xz \
+    json-devel boost-devel openssl-devel libarchive-devel xxhash-devel libzstd-devel \
+    lz4-devel xz-devel brotli-devel flac-devel fmt-devel range-v3-devel \
+    parallel-hashmap-devel && dnf clean all
+RUN dnf install -y utf8cpp-devel && dnf clean all
+RUN dnf --setopt=zchunk=False --setopt=retries=5 --setopt=timeout=60 install -y fuse3-devel qt6-qtbase-devel tomlplusplus-devel rpm-build && dnf clean all
+WORKDIR /work

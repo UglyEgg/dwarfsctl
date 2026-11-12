@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement to the everyday DwarFS workflow
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task or friction before proposing a control or implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: What would a good experience look like?
+      description: Explain the visible outcome in Dolphin, DwarFS Utility, or the tray.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried?
+      description: Include workarounds or existing tools if relevant.

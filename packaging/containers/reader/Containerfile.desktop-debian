@@ -1,0 +1,3 @@
+ARG BASE=localhost/dwarfsctl-reader-debian
+FROM ${BASE}
+RUN apt-get update && apt-get install -y --no-install-recommends dbus-daemon extra-cmake-modules qt6-tools-dev qt6-tools-dev-tools qt6-svg-dev libkf6coreaddons-dev libkf6i18n-dev libkf6kio-dev libkf6jobwidgets-dev libkf6notifications-dev libkf6statusnotifieritem-dev libkf6iconthemes-dev fakeroot && rm -rf /var/lib/apt/lists/*

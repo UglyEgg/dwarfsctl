@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="c-bg" x1="7" y1="5" x2="58" y2="59" gradientUnits="userSpaceOnUse"><stop stop-color="#324a65"/><stop offset="1" stop-color="#142235"/></linearGradient>
+    <linearGradient id="c-top" x1="18" y1="14" x2="46" y2="34" gradientUnits="userSpaceOnUse"><stop stop-color="#ffc15e"/><stop offset="1" stop-color="#ef6a49"/></linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#09111b" opacity=".24" transform="translate(0 1)"/><rect x="4" y="3" width="56" height="56" rx="14" fill="url(#c-bg)"/>
+  <path d="m13 24 19-11 19 11-19 11z" fill="url(#c-top)"/><path d="m13 24 19 11v17L13 41z" fill="#d6533f"/><path d="m51 24-19 11v17l19-11z" fill="#f18a4f"/>
+  <path d="m19 31 13 7 13-7m-26 8 13 7 13-7" fill="none" stroke="#fff0d3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+  <path d="M6 4h14c8 0 12 2.8 12 7s-4 7-12 7H6zm7 4v6h7c3.4 0 5-1 5-3s-1.6-3-5-3z" fill="#9d3f37" fill-rule="evenodd" opacity=".42" transform="matrix(.5 -.2895 .8636 .5 14.2 25.2)"/>
+  <path d="M6 4h14c8 0 12 2.8 12 7s-4 7-12 7H6zm7 4v6h7c3.4 0 5-1 5-3s-1.6-3-5-3z" fill="#fff5df" fill-rule="evenodd" transform="matrix(.5 -.2895 .8636 .5 13 24)"/>
+  <path d="M32 41v7" stroke="#65c8e8" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

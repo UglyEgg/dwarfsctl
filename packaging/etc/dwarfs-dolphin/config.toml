@@ -1,0 +1,39 @@
+# System-wide defaults for dwarfsctl + KDE integration.
+#
+# This file is optional. If present, it is loaded as the lowest-precedence layer.
+# Users can override any setting in their per-user config.
+#
+# Built-in profiles are prefixed with '@'. They are treated as reserved by the CLI/UI
+# (no set/delete) but can still be overridden by manually editing TOML.
+
+[mkdwarfs_profiles]
+
+[mkdwarfs_profiles."@balanced"]
+read_only = true
+args = [
+  "--compression=zstd:level=5",
+  "--order=path",
+]
+
+[mkdwarfs_profiles."@fast"]
+read_only = true
+args = [
+  "--compression=zstd:level=1",
+  "--order=path",
+]
+
+[mkdwarfs_profiles."@max"]
+read_only = true
+args = [
+  "--compression=zstd:level=15",
+  "--order=path",
+]
+
+# Git repository archival: optimize for many small files, preserve metadata, and use SHA-256 for deduplication.
+[mkdwarfs_profiles."@git"]
+read_only = true
+args = [
+  "--compression=zstd:level=9",
+  "--order=path",
+  "--file-hash=sha256",
+]

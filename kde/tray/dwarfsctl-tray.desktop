@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DwarFS Volumes
+Comment=Manage mounted DwarFS filesystem images
+Exec=dwarfsctl-tray
+Icon=dwarfsctl
+Terminal=false
+Categories=Utility;

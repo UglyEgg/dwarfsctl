@@ -1,0 +1,23 @@
+{
+  "KPlugin": {
+    "Name": "DwarFS Tools (dwarfsctl)",
+    "Description": "DwarFS integration backed by dwarfsctl.",
+    "Icon": "database",
+    "Authors": [
+      { "Name": "Richard Majewski" },
+      { "Name": "Varanid Works" }
+    ],
+    "License": "GPL-3.0-or-later",
+    "Version": "@PROJECT_VERSION@",
+    "EnabledByDefault": true,
+
+    "MimeTypes": [
+    "application/x-dwarfs",
+    "all/allfiles",
+      "inode/directory"
+    ],
+    "ServiceTypes": [
+      "KFileItemAction/Plugin"
+    ]
+  }
+}

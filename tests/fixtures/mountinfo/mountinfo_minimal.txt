@@ -1,0 +1,2 @@
+29 23 0:25 / /home/rich rw,relatime - ext4 /dev/sda1 rw
+30 23 0:26 / /run rw,nosuid,nodev - tmpfs tmpfs rw

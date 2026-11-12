@@ -1,0 +1,1 @@
+123 45 0:99 / /run/user/1000/dwarfs/0123456789abcdef rw,nosuid,nodev,relatime user_id=1000,group_id=1000 - fuse.dwarfs /data/archive/foo.dwarfs rw

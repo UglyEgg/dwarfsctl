@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "core.h"
+namespace ctl {
+J schema() { return J::parse(R"ctl(@CTL_SCHEMA@)ctl"); }
+std::string builtin_profiles() { return R"ctl(@CTL_PROFILES@)ctl"; }
+}

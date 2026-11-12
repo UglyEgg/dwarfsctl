@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="case" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f8fafb"/><stop offset="1" stop-color="#d9dfe3"/>
+    </linearGradient>
+    <linearGradient id="platter" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#71808c"/><stop offset="1" stop-color="#3b4650"/>
+    </linearGradient>
+  </defs>
+  <rect x="7" y="5" width="50" height="54" rx="6" fill="#17212b" opacity=".18" transform="translate(0 1)"/>
+  <rect x="7" y="5" width="50" height="52" rx="6" fill="url(#case)" stroke="#89949d"/>
+  <path d="M8 49h48v8H8z" fill="#4b5660"/>
+  <path d="M8 49h48v1H8z" fill="#fff" opacity=".65"/>
+  <circle cx="29" cy="27" r="16" fill="#bec6cc"/>
+  <circle cx="29" cy="27" r="13" fill="url(#platter)"/>
+  <path d="M29 15a12 12 0 0 1 12 12H29z" fill="#3daee9" opacity=".42"/>
+  <circle cx="29" cy="27" r="4" fill="#eff3f5"/>
+  <circle cx="29" cy="27" r="2" fill="#f6b44d"/>
+  <path d="M44 21l5 5-5 5v-3h-7v-4h7zm5 12l-5 5v-3h-7v-4h7v-3z" fill="#3daee9"/>
+  <rect x="13" y="52" width="17" height="2" rx="1" fill="#f6b44d"/>
+  <rect x="33" y="52" width="10" height="2" rx="1" fill="#d5dadd"/>
+  <circle cx="51" cy="53" r="1.5" fill="#2ecc71"/>
+</svg>

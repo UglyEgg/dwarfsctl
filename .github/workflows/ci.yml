@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            arch: x86_64
+            runner: ubuntu-24.04
+          - distro: fedora
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          - distro: debian
+            arch: x86_64
+            runner: ubuntu-24.04
+          - distro: ubuntu
+            arch: x86_64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    env:
+      FEDORA_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Architecture guards
+        run: |
+          bash tests/dbus_contract_check.sh
+          python3 tests/guards.py
+      - name: Build, test and package complete C++ application
+        run: ./packaging/container-build.sh ${{ matrix.distro }}
+      - name: Install package into a clean distribution container
+        run: ./packaging/test-package.sh ${{ matrix.distro }}
+      - name: Reference image compatibility
+        run: |
+          podman run --rm -v "$PWD:/work:Z" localhost/dwarfsctl-desktop-${{ matrix.distro }} bash tests/reader/run.sh stage/${{ matrix.distro }}/usr/bin/dwarfsctl stage/${{ matrix.distro }}/usr/libexec/dwarfsctl-engine build/test-tools
+      - uses: actions/upload-artifact@v6
+        with:
+          name: dwarfsctl-${{ matrix.distro }}-${{ matrix.arch }}
+          path: build-out/${{ matrix.distro }}/*
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tests/docs_check.py
+      - run: sudo apt-get update && sudo apt-get install -y groff
+      - run: groff -man -Tutf8 -z man/dwarfsctl.1

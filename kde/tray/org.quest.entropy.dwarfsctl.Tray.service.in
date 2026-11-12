@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.quest.entropy.dwarfsctl.Tray
+Exec=@EXEC@

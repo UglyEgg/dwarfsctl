@@ -1,0 +1,13 @@
+{
+  "KPlugin": {
+    "Name": "DwarFS Properties",
+    "Description": "Properties for DwarFS images",
+    "Version": "@DWARFSCTL_DOLPHIN_VERSION@",
+    "License": "GPL-3.0-or-later",
+    "EnabledByDefault": true,
+    "Icon": "dwarfsctlimage",
+    "MimeTypes": ["application/x-dwarfs", "application/x-dwarfs-image"]
+  },
+  "MimeType": "application/x-dwarfs;application/x-dwarfs-image",
+  "X-KDE-Protocols": ["file"]
+}

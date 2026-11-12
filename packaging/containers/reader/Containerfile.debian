@@ -1,0 +1,15 @@
+ARG BASE=debian:trixie-slim
+FROM ${BASE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl xz-utils cmake ninja-build g++ pkg-config python3 \
+    libboost-chrono-dev libboost-filesystem-dev libboost-program-options-dev \
+    nlohmann-json3-dev libssl-dev libarchive-dev libxxhash-dev libzstd-dev liblz4-dev liblzma-dev \
+    libbrotli-dev libflac++-dev libfmt-dev librange-v3-dev libparallel-hashmap-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libutfcpp-dev && rm -rf /var/lib/apt/lists/*
+RUN . /etc/os-release; if [ "$ID" = ubuntu ]; then \
+    apt-get update && apt-get install -y --no-install-recommends libboost-process-dev \
+    && rm -rf /var/lib/apt/lists/*; fi
+RUN apt-get update && apt-get install -y --no-install-recommends libfuse3-dev qt6-base-dev libtomlplusplus-dev dpkg-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /work

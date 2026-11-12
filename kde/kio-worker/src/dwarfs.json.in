@@ -1,0 +1,20 @@
+{
+  "KDE-KIO-Protocols": {
+    "dwarfs": {
+      "Class": ":local",
+      "Icon": "dwarfsctlimage",
+      "protocol": "dwarfs",
+      "input": "filesystem",
+      "output": "filesystem",
+      "listing": ["Name", "Type", "Size", "Access", "Owner", "Group", "Link"],
+      "reading": true,
+      "writing": false,
+      "makedir": false,
+      "deleting": false,
+      "moving": false,
+      "copyFromFile": false,
+      "copyToFile": true,
+      "source": true
+    }
+  }
+}

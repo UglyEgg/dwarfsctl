@@ -1,0 +1,18 @@
+<RCC>
+  <qresource prefix="/dwarfsctl-tray">
+    <file>resources/dwarfsctl-app.svg</file>
+    <file>resources/dwarfsctl-volume.svg</file>
+    <file>resources/helmet-mounted.svg</file>
+    <file>resources/helmet-unmounted.svg</file>
+  </qresource>
+
+  <!-- Lifted from the Dolphin plugin: canonical About + easter egg UI assets -->
+  <qresource prefix="/dwarfsctl">
+    <file alias="dwarfsctl_about.png">resources/about/dwarfsctl_about.png</file>
+    <file alias="github-icon.png">resources/about/github-icon.png</file>
+    <file alias="gplv3plus-icon.png">resources/about/gplv3plus-icon.png</file>
+    <file alias="DellaRespira-Regular.ttf">resources/about/DellaRespira-Regular.ttf</file>
+    <file alias="LICENSE.txt">resources/about/LICENSE.txt</file>
+    <file alias="CREDITS.md">resources/about/CREDITS.md</file>
+  </qresource>
+</RCC>

@@ -1,0 +1,57 @@
+name: Bug report
+description: Report behavior that is broken or unexpected
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve DwarFSctl. Do not include private files,
+        personal paths, credentials, or sensitive image contents.
+  - type: input
+    id: version
+    attributes:
+      label: DwarFSctl version
+      description: Run `dwarfsctl --version`.
+      placeholder: "Paste the complete version output"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Distribution, Plasma version, and CPU architecture.
+      placeholder: "Fedora 45, Plasma 6.5, x86-64"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe what you expected and what appeared instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open…
+        2. Choose…
+        3. Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste relevant output from `dwarfsctl doctor` and any visible error.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed personal paths, credentials, and private image contents.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

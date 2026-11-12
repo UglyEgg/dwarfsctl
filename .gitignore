@@ -1,0 +1,30 @@
+/target/
+**/*.swp
+**/*.swo
+.DS_Store
+/kde/kf6-plugin/build/
+/kde/kf6-plugin/build-*/
+**/*.user
+**/*.autosave
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+.venv/
+__pycache__/
+*.py[cod]
+
+# packaging/install.sh --build-only output
+/build-out/
+
+# Hermes agent workspace: plans and scratch, not part of the project
+/.hermes/
+
+# Out-of-tree CMake build dirs for the KDE components
+/build/
+
+# Native reader build and staging artifacts
+/build-reader/
+/stage-reader/
+/stage/

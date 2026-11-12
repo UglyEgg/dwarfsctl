@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dwarfsctl recommendation details v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "goal",
+    "profile",
+    "recommendation",
+    "cache_hit"
+  ],
+  "properties": {
+    "schema": {
+      "const": "dwarfsctl.recommend.v1"
+    },
+    "goal": {
+      "enum": [
+        "smallest",
+        "balanced",
+        "fastest-browse",
+        "fast-build"
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "required": [
+        "files",
+        "directories",
+        "total_bytes",
+        "sampled_files",
+        "sampled_bytes",
+        "precompressed_sample_bytes",
+        "skipped_symlinks",
+        "skipped_special",
+        "unreadable",
+        "truncated"
+      ],
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directories": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sampled_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sampled_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "precompressed_sample_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_symlinks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_special": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unreadable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "required": [
+        "flags_only",
+        "reasons",
+        "warnings",
+        "confidence"
+      ],
+      "properties": {
+        "flags_only": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium"
+          ]
+        }
+      }
+    },
+    "cache_hit": {
+      "type": "boolean"
+    }
+  }
+}

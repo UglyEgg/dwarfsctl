@@ -1,0 +1,5 @@
+[Thumbnailer Entry]
+Type=Service
+MimeType=application/x-dwarfs;
+Exec=dwarfsctl-thumbnailer %i %o %s
+Name=DwarFS Thumbnailer
