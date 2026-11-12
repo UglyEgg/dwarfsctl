@@ -10,14 +10,35 @@
   <a href="https://github.com/UglyEgg/dwarfsctl/actions/workflows/ci.yml"><img src="https://github.com/UglyEgg/dwarfsctl/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
 </p>
 
-DwarFSctl adds creation, browsing, mounting, extraction, file previews and image
-details to Dolphin, with a tray application for mounted volumes and defaults.
+DwarFSctl brings compressed filesystem images to the KDE desktop. Open **DwarFS
+Utility**, the standalone app, to create images, inspect their contents, compare
+compression, mount volumes and extract files. Its visual Contents view helps you
+explore what takes up space inside an image.
+
+The same tools are available directly in Dolphin, with file previews, an image
+Properties page and mounted volumes in Places. A Plasma tray application gives
+you quick access to mounted images and shared settings.
 
 The application ships the DwarFS engine it was tested with. Users do not need
 to install DwarFS command-line tools or Rust.
 
 > DwarFSctl is an independent project. It is not affiliated with or endorsed by
 > KDE or the DwarFS project.
+
+## DwarFS Utility
+
+Manage images in a standalone workspace, using the same engine and settings as
+the Dolphin integration. Open **DwarFS Utility** from your application launcher.
+
+![DwarFS Utility showing image size, compression savings and image details](docs/screenshots/utility-overview.png)
+
+Switch to **Contents** to explore the image's folders by size. Point to a ring
+to see its path and contents.
+
+![DwarFS Utility showing the Content Rings view](docs/screenshots/utility-contents.png)
+
+Screenshots show a sample image containing project documentation, artwork and
+source files, rendered with KDE's Breeze style.
 
 ## Install
 

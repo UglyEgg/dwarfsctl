@@ -371,7 +371,7 @@ private slots:
 
         m_menu->addSeparator();
 
-        auto* settings = m_menu->addAction(QIcon::fromTheme(QStringLiteral("settings-configure")), tr("Settings…"));
+        auto* settings = m_menu->addAction(tr("Settings…"));
         connect(settings, &QAction::triggered, this, [this]() {
             SettingsDialog dialog(m_menu);
             dialog.exec();

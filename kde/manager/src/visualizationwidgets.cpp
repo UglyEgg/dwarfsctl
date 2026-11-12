@@ -185,7 +185,7 @@ ContentRingsWidget::ContentRingsWidget(QWidget *parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("contentRings"));
-    setMinimumHeight(300);
+    setMinimumHeight(160);
     setMouseTracking(true);
     setAccessibleName(i18n("Image contents by size"));
 }

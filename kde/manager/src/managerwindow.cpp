@@ -109,7 +109,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &DwarfsManagerWindow::chooseImages);
 
-    auto *createAction = new QAction(QIcon::fromTheme(QStringLiteral("archive-new")), i18n("Create Image…"), this);
+    auto *createAction = new QAction(QIcon::fromTheme(QStringLiteral("document-new")), i18n("Create Image…"), this);
     createAction->setObjectName(QStringLiteral("createImageAction"));
     createAction->setShortcut(QKeySequence::New);
     connect(createAction, &QAction::triggered, this, &DwarfsManagerWindow::createImage);
@@ -126,7 +126,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_extractAction->setObjectName(QStringLiteral("extractAction"));
     connect(m_extractAction, &QAction::triggered, this, &DwarfsManagerWindow::extractImage);
 
-    m_verifyAction = new QAction(QIcon::fromTheme(QStringLiteral("tools-check-spelling")), i18n("Verify…"), this);
+    m_verifyAction = new QAction(QIcon::fromTheme(QStringLiteral("security-high")), i18n("Verify…"), this);
     m_verifyAction->setObjectName(QStringLiteral("verifyAction"));
     connect(m_verifyAction, &QAction::triggered, this, &DwarfsManagerWindow::verifyImage);
 
@@ -147,6 +147,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     connect(settingsAction, &QAction::triggered, this, &DwarfsManagerWindow::showSettings);
 
     auto *aboutAction = new QAction(QIcon::fromTheme(QStringLiteral("help-about")), i18n("About DwarFSctl"), this);
+    aboutAction->setObjectName(QStringLiteral("aboutAction"));
     connect(aboutAction, &QAction::triggered, this, [] { dwarfsplugin::showTrayAbout(); });
 
     auto *fileMenu = menuBar()->addMenu(i18n("File"));
@@ -184,6 +185,15 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     toolbar->addAction(m_extractAction);
     toolbar->addSeparator();
     toolbar->addAction(m_verifyAction);
+    auto *toolbarSpacer = new QWidget(toolbar);
+    toolbarSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolbar->addWidget(toolbarSpacer);
+    auto *aboutButton = new QToolButton(toolbar);
+    aboutButton->setObjectName(QStringLiteral("aboutButton"));
+    aboutButton->setDefaultAction(aboutAction);
+    aboutButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    aboutButton->setAutoRaise(true);
+    toolbar->addWidget(aboutButton);
 
     auto *splitter = new QSplitter(this);
     splitter->setObjectName(QStringLiteral("managerSplitter"));

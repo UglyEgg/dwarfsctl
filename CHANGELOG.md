@@ -8,6 +8,9 @@ This file records release changes.
   mounting, browsing, extracting, verifying and creating images using the same
   components as Dolphin and the tray, with an exact compression overview and a
   bounded Content Rings visualization of logical image contents.
+- Added a toolbar About button to DwarFS Utility, aligned tray menu styling,
+  corrected Breeze toolbar icons and fixed Contents clipping in short windows.
+- Added application screenshots and a standalone-app introduction to the README.
 - Updated the Fedora package target to Fedora 45 and added native ARM64 package,
   installed-package and upstream reference-image CI coverage.
 - Added a direct KIO copy-out path so Dolphin can publish files from a `dwarfs:`

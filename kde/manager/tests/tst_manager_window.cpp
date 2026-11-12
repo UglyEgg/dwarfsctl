@@ -13,6 +13,7 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QToolBar>
 #include <QtTest>
 
 #include <KLocalizedString>
@@ -33,6 +34,11 @@ private Q_SLOTS:
         QVERIFY(window.findChild<QStackedWidget *>(QStringLiteral("detailPages")));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("openImageAction")));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("createImageAction")));
+        auto *about = window.findChild<QAction *>(QStringLiteral("aboutAction"));
+        auto *aboutButton = window.findChild<QToolButton *>(QStringLiteral("aboutButton"));
+        QVERIFY(about && aboutButton);
+        QCOMPARE(aboutButton->defaultAction(), about);
+        QVERIFY(window.findChild<QToolBar *>(QStringLiteral("mainToolBar"))->isAncestorOf(aboutButton));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("forgetImageAction")));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("clearRecentImagesAction")));
         QVERIFY(window.findChild<QToolButton *>(QStringLiteral("forgetImageButton")));
@@ -109,6 +115,36 @@ private Q_SLOTS:
         QVERIFY(rings.setUsage(usage));
         QCOMPARE(rings.totalBytes(), 42);
         QCOMPARE(rings.topLevelCount(), 1);
+    }
+
+    void captureDocumentationScreenshots()
+    {
+        const QString directory = qEnvironmentVariable("DWARFSCTL_SCREENSHOT_DIR");
+        if (directory.isEmpty())
+            QSKIP("Documentation capture was not requested");
+        const QString image = qEnvironmentVariable("DWARFSCTL_SCREENSHOT_IMAGE");
+        QVERIFY(QFileInfo::exists(image));
+        DwarfsManagerWindow window;
+        window.resize(1100, 760);
+        window.openImages({image});
+        window.show();
+        QTest::qWait(3000);
+        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("inlineError"))->isVisible());
+        auto *rings = static_cast<ContentRingsWidget *>(window.findChild<QWidget *>(QStringLiteral("contentRings")));
+        QVERIFY(rings);
+        QCOMPARE(rings->topLevelCount(), 3);
+        auto *views = window.findChild<QTabWidget *>(QStringLiteral("imageViews"));
+        QVERIFY(views);
+        views->setCurrentIndex(0);
+        QTest::qWait(200);
+        QVERIFY(window.grab().save(directory + QStringLiteral("/utility-overview.png")));
+        views->setCurrentIndex(1);
+        QTest::qWait(1000);
+        QVERIFY(window.grab().save(directory + QStringLiteral("/utility-contents.png")));
+        window.resize(800, 620);
+        QTest::qWait(200);
+        QVERIFY(rings->parentWidget()->rect().contains(rings->geometry()));
+        QVERIFY(window.grab().save(directory + QStringLiteral("/utility-narrow.png")));
     }
 };
 

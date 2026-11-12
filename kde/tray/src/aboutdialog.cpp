@@ -216,9 +216,9 @@ AboutDialog::AboutDialog(QWidget *parent)
     title->setFont(brandFont);
     identity->addWidget(title);
 
-    identity->addWidget(wrappedLabel(i18n("<b>Like DMG support. But for DwarFS.</b>"), aboutContent));
+    identity->addWidget(wrappedLabel(i18n("<b>DwarFS images, at home in KDE Plasma.</b>"), aboutContent));
     identity->addWidget(wrappedLabel(
-        i18n("Mount, inspect, browse, and extract DwarFS filesystem images directly from Dolphin."),
+        i18n("Create, browse, mount, and extract compressed filesystem images with DwarFS Utility and Dolphin."),
         aboutContent));
     auto *linkRow = new QHBoxLayout();
     linkRow->setContentsMargins(0, 4, 0, 0);
