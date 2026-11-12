@@ -39,7 +39,7 @@ jobs:
       - name: Reference image compatibility
         run: |
           podman run --rm -v "$PWD:/work:Z" localhost/dwarfsctl-desktop-${{ matrix.distro }} bash tests/reader/run.sh stage/${{ matrix.distro }}/usr/bin/dwarfsctl stage/${{ matrix.distro }}/usr/libexec/dwarfsctl-engine build/test-tools
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: dwarfsctl-${{ matrix.distro }}-${{ matrix.arch }}
           path: build-out/${{ matrix.distro }}/*
