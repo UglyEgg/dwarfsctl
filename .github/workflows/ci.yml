@@ -51,5 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 tests/docs_check.py
+      - run: python3 tests/source_release_check.py
       - run: sudo apt-get update && sudo apt-get install -y groff
       - run: groff -man -Tutf8 -z man/dwarfsctl.1

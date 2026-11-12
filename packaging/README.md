@@ -25,13 +25,13 @@ Run the installed-package smoke test without changing the host:
 `./packaging/install.sh --system` builds and tests first, then asks the
 distribution package manager to install through PolicyKit.
 
-After all four supported native packages and both source archives have been
+After all five native packages and their corresponding source archives have been
 qualified, assemble and sign the release set with:
 
 ```sh
 ./packaging/release-artifacts.sh ./release \
   build-out/fedora-x86_64 build-out/fedora-aarch64 \
-  build-out/debian build-out/ubuntu
+  build-out/debian build-out/ubuntu build-out/arch
 ```
 
 The script creates `SHA256SUMS` and `SHA256SUMS.asc`. It uses GPG key
@@ -52,9 +52,8 @@ standalone app and desktop integration. It is not an AUR submission recipe.
 Arch is a rolling target; rebuild against current repositories before release.
 The missing parallel-hashmap headers come from a checksummed upstream 2.0.0
 archive; their source and license are included in the package.
-Pass `build-out/arch` as an additional directory to `release-artifacts.sh` to
-include the qualified Arch package and its extra source archive in the signed
-manifest. The existing four-package release requirements still apply.
+The complete release set requires the qualified Arch package and its extra
+source archive alongside both Fedora architectures, Debian and Ubuntu.
 
 ## Flatpak assessment
 

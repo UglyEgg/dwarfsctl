@@ -29,6 +29,8 @@ found_rpm_x86=0
 found_rpm_arm=0
 found_debian=0
 found_ubuntu=0
+found_arch=0
+found_phmap=0
 found_source=0
 found_upstream=0
 for output in "$@"; do
@@ -42,14 +44,15 @@ for output in "$@"; do
       dwarfs-dolphin_"$version"-*_ubuntu*_amd64.deb) found_ubuntu=1 ;;
       dwarfs-dolphin-"$version"-source.tar.gz) found_source=1 ;;
       dwarfs-0.15.7.tar.xz) found_upstream=1 ;;
-      dwarfs-dolphin-"$version"-*-x86_64.pkg.tar.zst|parallel-hashmap-2.0.0.tar.gz) ;;
+      dwarfs-dolphin-"$version"-*-x86_64.pkg.tar.zst) found_arch=1 ;;
+      parallel-hashmap-2.0.0.tar.gz) found_phmap=1 ;;
       *) continue ;;
     esac
     copy_verified "$artifact"
   done < <(find "$output" -maxdepth 1 -type f -print0)
 done
 
-(( found_rpm_x86 && found_rpm_arm && found_debian && found_ubuntu && found_source && found_upstream )) || {
+(( found_rpm_x86 && found_rpm_arm && found_debian && found_ubuntu && found_arch && found_phmap && found_source && found_upstream )) || {
   echo "release set is incomplete" >&2
   exit 1
 }
