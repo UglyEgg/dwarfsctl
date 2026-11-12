@@ -26,4 +26,19 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-source-check-") as temporary:
                    env=environment, check=True)
     assert first.read_bytes() == (work / "second" / archive_name).read_bytes(), \
         "Source archives differ after extraction and checkout timestamp changes"
+    # Containers may have neither Git nor permission to read the host checkout's
+    # Git directory. Verify the real build entry points forward the host epoch.
+    tools = work / "bin"
+    tools.mkdir()
+    podman = tools / "podman"
+    podman.write_text("""#!/usr/bin/env python3
+import sys
+if sys.argv[1] == 'run':
+    assert 'SOURCE_DATE_EPOCH=1700000000' in sys.argv[2:], 'Host epoch was not forwarded to the container'
+""")
+    podman.chmod(0o755)
+    environment["PATH"] = str(tools) + os.pathsep + environment["PATH"]
+    for target in ["fedora", "arch"]:
+        subprocess.run(["bash", str(extracted / "packaging/container-build.sh"), target],
+                       env=environment, check=True)
 print("Corresponding-source archive reproducibility passed")
