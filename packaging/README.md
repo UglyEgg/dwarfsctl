@@ -41,3 +41,37 @@ the SSH keys configured for Git remotes.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for supported targets, the native
 development build and release validation boundaries.
+
+## Arch Linux candidate
+
+Build with `./packaging/container-build.sh arch`, then run
+`./packaging/test-package.sh arch`. The native `.pkg.tar.zst` is written to
+`build-out/arch/`; install a qualified candidate with `sudo pacman -U PACKAGE`.
+The PKGBUILD packages the payload tested in the Arch container, including the
+standalone app and desktop integration. It is not an AUR submission recipe.
+Arch is a rolling target; rebuild against current repositories before release.
+The missing parallel-hashmap headers come from a checksummed upstream 2.0.0
+archive; their source and license are included in the package.
+Pass `build-out/arch` as an additional directory to `release-artifacts.sh` to
+include the qualified Arch package and its extra source archive in the signed
+manifest. The existing four-package release requirements still apply.
+
+## Flatpak assessment
+
+A standalone Flatpak edition is feasible for creation, inspection and extraction,
+but it cannot replace the native package's host Dolphin plugins, KIO worker and
+Plasma integration. Flatpak installs application exports in specific locations;
+it does not install shared libraries into the host's Qt plugin directories.
+See [Flatpak desktop integration](https://docs.flatpak.org/en/latest/desktop-integration.html).
+
+The installed KDE 6.11 SDK sandbox was checked: it has no `/dev/fuse` device or
+`fusermount3`. Mounts inside a sandbox also do not provide the current host-visible
+volume workflow. A future edition should use the native Mounts1 D-Bus service as
+an optional companion, and disable mount actions when that service is absent.
+Its About action currently delegates to the tray and would also need a local
+dialog. File chooser grants, output paths and shared preferences need explicit
+portal/sandbox testing. See [Flatpak permissions](https://docs.flatpak.org/en/latest/sandbox-permissions.html).
+
+For the first public release, ship native packages. Treat Flatpak as a subsequent
+standalone edition with an explicit feature boundary, rather than advertising a
+manifest that has not been built or qualified.

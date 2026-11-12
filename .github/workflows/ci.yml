@@ -23,6 +23,9 @@ jobs:
           - distro: ubuntu
             arch: x86_64
             runner: ubuntu-24.04
+          - distro: arch
+            arch: x86_64
+            runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
     env:
       FEDORA_ARCH: ${{ matrix.arch }}

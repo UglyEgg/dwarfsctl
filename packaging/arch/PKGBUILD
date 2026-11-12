@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Package the payload produced and tested by packaging/build-all.sh on Arch.
+pkgname=dwarfs-dolphin
+pkgver=0.13.0
+pkgrel=1
+pkgdesc='DwarFS Utility and native KDE Plasma/Dolphin image integration'
+arch=('x86_64')
+url='https://github.com/UglyEgg/dwarfsctl'
+license=('GPL-3.0-or-later' 'MIT' 'BSL-1.0' 'Apache-2.0')
+depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'kio' 'ki18n' 'knotifications'
+         'kstatusnotifieritem' 'kiconthemes' 'kcoreaddons' 'kjobwidgets'
+         'kwidgetsaddons' 'fuse3' 'coreutils' 'shared-mime-info'
+         'desktop-file-utils' 'dbus' 'openssl' 'libarchive' 'xxhash' 'zstd'
+         'lz4' 'xz' 'brotli' 'flac' 'fmt' 'boost-libs' 'tomlplusplus')
+optdepends=('dolphin: file actions, Properties and image browsing')
+provides=("dwarfsctl=$pkgver")
+conflicts=('dwarfsctl')
+options=('!strip' '!debug')
+backup=('etc/dwarfs-dolphin/config.toml')
+package() {
+    cp -a "${DWARFSCTL_STAGE:?tested staging directory required}/." "$pkgdir/"
+}

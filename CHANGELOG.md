@@ -11,6 +11,8 @@ This file records release changes.
 - Added a toolbar About button to DwarFS Utility, aligned tray menu styling,
   corrected Breeze toolbar icons and fixed Contents clipping in short windows.
 - Added application screenshots and a standalone-app introduction to the README.
+- Added an Arch Linux package build and clean-install test, with checksummed
+  parallel-hashmap headers and preserved source and license material.
 - Updated the Fedora package target to Fedora 45 and added native ARM64 package,
   installed-package and upstream reference-image CI coverage.
 - Added a direct KIO copy-out path so Dolphin can publish files from a `dwarfs:`

@@ -42,6 +42,7 @@ for output in "$@"; do
       dwarfs-dolphin_"$version"-*_ubuntu*_amd64.deb) found_ubuntu=1 ;;
       dwarfs-dolphin-"$version"-source.tar.gz) found_source=1 ;;
       dwarfs-0.15.7.tar.xz) found_upstream=1 ;;
+      dwarfs-dolphin-"$version"-*-x86_64.pkg.tar.zst|parallel-hashmap-2.0.0.tar.gz) ;;
       *) continue ;;
     esac
     copy_verified "$artifact"

@@ -12,6 +12,7 @@ Podman provides the supported, reproducible build environment:
 ./packaging/container-build.sh fedora   # Fedora 45; native x86-64 or ARM64
 ./packaging/container-build.sh debian   # Debian 13
 ./packaging/container-build.sh ubuntu   # Ubuntu 26.04
+./packaging/container-build.sh arch     # Arch Linux, x86-64
 ```
 
 Each command builds the complete application, runs its tests and writes a native
@@ -20,12 +21,15 @@ host. Run `./packaging/test-package.sh <distribution>` to install that package
 inside a disposable matching container and exercise the installed payload.
 Fedora defaults to the host architecture; CI qualifies both x86-64 and ARM64.
 
-For an already provisioned development environment:
+For an already provisioned Fedora, Debian or Ubuntu development environment:
 
 ```sh
 ./packaging/build-all.sh build/native stage/native
 ./packaging/package.sh stage/native build-out/native
 ```
+
+Use the container path for Arch; it also supplies and stages the pinned header
+dependency that is absent from Arch's official repositories.
 
 `just guard` runs the fast architecture checks. `just docs` validates repository
 links and renders the manual. The full distribution build remains the release

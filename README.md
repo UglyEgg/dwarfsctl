@@ -22,6 +22,9 @@ you quick access to mounted images and shared settings.
 The application ships the DwarFS engine it was tested with. Users do not need
 to install DwarFS command-line tools or Rust.
 
+Visit [dwfs.entropy.quest](https://dwfs.entropy.quest/) for the project overview,
+everyday guide and release status.
+
 > DwarFSctl is an independent project. It is not affiliated with or endorsed by
 > KDE or the DwarFS project.
 
@@ -42,8 +45,11 @@ source files, rendered with KDE's Breeze style.
 
 ## Install
 
-Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13 and
-Ubuntu 26.04 on x86-64.
+Version 0.13.0 is in pre-release testing. Signed public downloads have not been
+published yet; the instructions below describe the planned release packages.
+
+Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,
+Ubuntu 26.04 and Arch Linux on x86-64.
 Download the package for your distribution from the
 [latest release](https://github.com/UglyEgg/dwarfsctl/releases/latest), then
 install it with the distribution package manager:
@@ -54,6 +60,9 @@ sudo dnf install ./dwarfs-dolphin-*.rpm
 
 # Debian or Ubuntu
 sudo apt install ./dwarfs-dolphin_*.deb
+
+# Arch Linux
+sudo pacman -U ./dwarfs-dolphin-*.pkg.tar.zst
 ```
 
 Log out and back in after the first installation so Plasma and Dolphin discover
@@ -121,7 +130,7 @@ The supported build uses Podman to create and test a native package for one of
 the target distributions:
 
 ```sh
-./packaging/container-build.sh fedora   # or debian, ubuntu
+./packaging/container-build.sh fedora   # or debian, ubuntu, arch
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture, development build,

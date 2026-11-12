@@ -1,0 +1,14 @@
+FROM docker.io/library/archlinux:base-devel
+RUN pacman -Syu --noconfirm && pacman -S --needed --noconfirm \
+    cmake ninja python curl licenses boost openssl libarchive xxhash zstd lz4 xz brotli \
+    flac fmt range-v3 utf8cpp nlohmann-json tomlplusplus fuse3 qt6-base \
+    qt6-tools qt6-svg qt6-wayland extra-cmake-modules kcoreaddons ki18n kio \
+    kjobwidgets knotifications kstatusnotifieritem kiconthemes dbus \
+    desktop-file-utils shared-mime-info && pacman -Scc --noconfirm
+# Arch has no official parallel-hashmap package. Pin the header-only dependency.
+RUN curl -fL --retry 3 https://codeload.github.com/greg7mdp/parallel-hashmap/tar.gz/refs/tags/v2.0.0 -o /tmp/phmap.tar.gz \
+    && echo '4f462f51a3468166ea4cf87c80e001dc1999093264cf55cbda3492ca39a7730b  /tmp/phmap.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/phmap.tar.gz -C /tmp \
+    && cp -a /tmp/parallel-hashmap-2.0.0/parallel_hashmap /usr/local/include/ \
+    && install -Dm644 /tmp/parallel-hashmap-2.0.0/LICENSE /usr/share/licenses/parallel-hashmap/LICENSE
+WORKDIR /work
