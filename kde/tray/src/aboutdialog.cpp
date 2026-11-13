@@ -21,6 +21,7 @@
 #include <QPixmap>
 #include <QScrollArea>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -333,4 +334,14 @@ AboutDialog::AboutDialog(QWidget *parent)
     QObject::connect(licenseButton, &QToolButton::clicked, this, [this, licenseItem] {
         setCurrentPage(licenseItem);
     });
+
+    auto *changeLog = documentPage(
+        resourceText(QStringLiteral(":/dwarfsctl/CHANGELOG.md"), i18n("Change log is unavailable.")),
+        this);
+    changeLog->setObjectName(QStringLiteral("changeLogBrowser"));
+    changeLog->setAccessibleName(i18n("Release history"));
+    changeLog->setFrameShape(QFrame::NoFrame);
+    changeLog->document()->setDocumentMargin(20);
+    auto *changeLogItem = addPage(changeLog, i18n("Change Log"));
+    changeLogItem->setIcon(QIcon::fromTheme(QStringLiteral("view-history")));
 }

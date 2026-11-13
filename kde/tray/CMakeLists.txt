@@ -133,6 +133,32 @@ if(BUILD_TESTING)
     enable_testing()
     add_test(NAME tst_mount_liveness COMMAND tst_mount_liveness)
 
+    add_executable(tst_about_dialog
+        tests/tst_about_dialog.cpp
+        src/aboutdialog.cpp
+        src/aboutdialog.h
+        src/dwarfsctlrunner.cpp
+        ${TRAY_RESOURCES}
+    )
+    target_include_directories(tst_about_dialog PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common
+    )
+    target_compile_definitions(tst_about_dialog PRIVATE
+        DWARFSCTL_TRAY_VERSION="${DWARFSCTL_TRAY_VERSION}"
+        DWARFSCTL_PLUGIN_VERSION="${DWARFSCTL_DOLPHIN_VERSION}"
+        DWARFSCTL_DBUS_API_MAJOR=1
+        DWARFSCTL_TEST_CHANGELOG="${CMAKE_CURRENT_SOURCE_DIR}/../../CHANGELOG.md"
+    )
+    target_link_libraries(tst_about_dialog PRIVATE
+        Qt6::Widgets Qt6::Test KF6::I18n KF6::WidgetsAddons
+    )
+    add_test(NAME tst_about_dialog COMMAND tst_about_dialog)
+    set_tests_properties(tst_about_dialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DWARFSCTL_BIN=/usr/bin/false"
+        TIMEOUT 30
+    )
+
     add_executable(tst_symbolic_icon
         tests/tst_symbolic_icon.cpp
         src/symboliciconrenderer.cpp

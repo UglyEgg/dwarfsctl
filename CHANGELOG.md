@@ -4,6 +4,7 @@ This file records release changes.
 
 ## 0.13.0 — Unreleased
 
+- Added a Change Log tab to About, showing the release history offline.
 - Added DwarFS Utility, a standalone Disk Utility-style workspace for inspecting,
   mounting, browsing, extracting, verifying and creating images using the same
   components as Dolphin and the tray, with an exact compression overview and a

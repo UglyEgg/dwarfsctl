@@ -14,5 +14,6 @@
     <file alias="DellaRespira-Regular.ttf">resources/about/DellaRespira-Regular.ttf</file>
     <file alias="LICENSE.txt">resources/about/LICENSE.txt</file>
     <file alias="CREDITS.md">resources/about/CREDITS.md</file>
+    <file alias="CHANGELOG.md">../../CHANGELOG.md</file>
   </qresource>
 </RCC>
