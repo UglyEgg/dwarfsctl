@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/UglyEgg/dwarfsctl/actions/workflows/ci.yml"><img src="https://github.com/UglyEgg/dwarfsctl/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://www.opendesktop.org/p/2381869"><img src="docs/badges/opendesktop.svg" alt="Download on OpenDesktop"></a>
 </p>
 
 DwarFSctl brings compressed filesystem images to the KDE desktop. Open **DwarFS
