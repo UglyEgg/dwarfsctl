@@ -45,7 +45,8 @@ source files, rendered with KDE's Breeze style.
 
 ## Install
 
-Version 0.13.0 is available with signed downloads.
+Version 0.13.0 is available. Downloads are verified using a GPG-signed checksum
+manifest.
 
 Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,
 Ubuntu 26.04 and Arch Linux on x86-64.
@@ -71,7 +72,7 @@ every component. Package upgrades normally need only a Dolphin and tray restart.
 
 In Dolphin:
 
-- Right-click a folder and choose **DwarFS → Build Image…**.
+- Right-click a folder and choose **Build image → DwarFS**.
 - Open a `.dwarfs` file to mount it and show the volume in Places.
 - Browse an image without mounting it through its `dwarfs:` location.
 - Open **Properties → DwarFS Image** for contents, compression and mount state.
