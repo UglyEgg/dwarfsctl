@@ -23,7 +23,7 @@ The application ships the DwarFS engine it was tested with. Users do not need
 to install DwarFS command-line tools or Rust.
 
 Visit [dwfs.entropy.quest](https://dwfs.entropy.quest/) for the project overview,
-everyday guide and release status.
+everyday guide and downloads.
 
 > DwarFSctl is an independent project. It is not affiliated with or endorsed by
 > KDE or the DwarFS project.
@@ -45,8 +45,7 @@ source files, rendered with KDE's Breeze style.
 
 ## Install
 
-Version 0.13.0 is in pre-release testing. Signed public downloads have not been
-published yet; the instructions below describe the planned release packages.
+Version 0.13.0 is available with signed downloads.
 
 Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,
 Ubuntu 26.04 and Arch Linux on x86-64.
@@ -106,8 +105,10 @@ and confirm its complete fingerprint before trusting the manifest:
 gpg --import RELEASE_SIGNING_KEY.asc
 gpg --fingerprint 60C38F37374C2B51BE7CA8CC698CE0575AED79AA
 gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum --check SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
 ```
+
+Confirm your package appears in the checksum output with `OK`.
 
 ## What is included
 

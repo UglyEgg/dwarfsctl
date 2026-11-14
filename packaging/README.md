@@ -42,11 +42,11 @@ the SSH keys configured for Git remotes.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for supported targets, the native
 development build and release validation boundaries.
 
-## Arch Linux candidate
+## Arch Linux
 
 Build with `./packaging/container-build.sh arch`, then run
 `./packaging/test-package.sh arch`. The native `.pkg.tar.zst` is written to
-`build-out/arch/`; install a qualified candidate with `sudo pacman -U PACKAGE`.
+`build-out/arch/`; install a qualified package with `sudo pacman -U PACKAGE`.
 The PKGBUILD packages the payload tested in the Arch container, including the
 standalone app and desktop integration. It is not an AUR submission recipe.
 Arch is a rolling target; rebuild against current repositories before release.
