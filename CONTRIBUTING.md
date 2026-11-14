@@ -68,6 +68,13 @@ The main checks are:
 - `tests/guards.py` for cross-component architecture rules
 - `tests/docs_check.py` for public repository links and documentation boundaries
 
+Documentation-only changes to the README, contributor/security guides, Mounts1
+reference, packaging guide, screenshots and badges run the fast documentation
+checks. Native package builds and CodeQL keep their required check names but
+report that no validation is needed. Other changes run the complete matrix;
+this includes workflow changes and embedded documents such as `CHANGELOG.md`.
+Manual CI runs and scheduled CodeQL scans always perform full validation.
+
 Interactive FUSE and Dolphin behavior must also be checked in a real Plasma
 session before a public release. Container tests cannot establish that Plasma
 has discovered plugins, MIME data, icons or the session mount service.

@@ -5,11 +5,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   native:
+    needs: documentation
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,34 +35,53 @@ jobs:
           - distro: arch
             arch: x86_64
             runner: ubuntu-24.04
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ needs.documentation.outputs.full_ci == 'true' && matrix.runner || 'ubuntu-24.04' }}
     env:
       FEDORA_ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate change detection
+        if: ${{ needs.documentation.result != 'success' || !contains(fromJSON('["true", "false"]'), needs.documentation.outputs.full_ci) }}
+        run: exit 1
+      - name: Documentation-only change
+        if: needs.documentation.outputs.full_ci == 'false'
+        run: echo 'Native package verification is not required for this documentation-only change.' >> "$GITHUB_STEP_SUMMARY"
+      - if: needs.documentation.outputs.full_ci == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Architecture guards
+        if: needs.documentation.outputs.full_ci == 'true'
         run: |
           bash tests/dbus_contract_check.sh
           python3 tests/guards.py
       - name: Build, test and package complete C++ application
+        if: needs.documentation.outputs.full_ci == 'true'
         run: ./packaging/container-build.sh ${{ matrix.distro }}
       - name: Install package into a clean distribution container
+        if: needs.documentation.outputs.full_ci == 'true'
         run: ./packaging/test-package.sh ${{ matrix.distro }}
       - name: Reference image compatibility
+        if: needs.documentation.outputs.full_ci == 'true'
         run: |
           podman run --rm -v "$PWD:/work:Z" localhost/dwarfsctl-desktop-${{ matrix.distro }} bash tests/reader/run.sh stage/${{ matrix.distro }}/usr/bin/dwarfsctl stage/${{ matrix.distro }}/usr/libexec/dwarfsctl-engine build/test-tools
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - if: needs.documentation.outputs.full_ci == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dwarfsctl-${{ matrix.distro }}-${{ matrix.arch }}
           path: build-out/${{ matrix.distro }}/*
   documentation:
+    outputs:
+      full_ci: ${{ steps.scope.outputs.full_ci }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Determine validation scope
+        id: scope
+        run: python3 .github/scripts/ci_scope.py
+      - run: python3 tests/ci_scope_check.py
       - run: python3 tests/docs_check.py
       - run: python3 tests/source_release_check.py
       - run: sudo apt-get update && sudo apt-get install -y groff

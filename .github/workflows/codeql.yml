@@ -8,11 +8,29 @@ on:
     - cron: '19 6 * * 1'
   workflow_dispatch:
 
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      full_ci: ${{ steps.scope.outputs.full_ci }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Determine validation scope
+        id: scope
+        run: python3 .github/scripts/ci_scope.py
   analyze:
+    needs: scope
+    if: ${{ !cancelled() }}
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-24.04
     permissions:
@@ -23,16 +41,25 @@ jobs:
       matrix:
         language: [c-cpp, python, actions]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate change detection
+        if: ${{ needs.scope.result != 'success' || !contains(fromJSON('["true", "false"]'), needs.scope.outputs.full_ci) }}
+        run: exit 1
+      - name: Documentation-only change
+        if: needs.scope.outputs.full_ci == 'false'
+        run: echo 'CodeQL is not required for this documentation-only change.' >> "$GITHUB_STEP_SUMMARY"
+      - if: needs.scope.outputs.full_ci == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Initialize CodeQL
+        if: needs.scope.outputs.full_ci == 'true'
         uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-extended
       - name: Analyze
+        if: needs.scope.outputs.full_ci == 'true'
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           category: /language:${{ matrix.language }}
