@@ -2,6 +2,14 @@
 
 This file records release changes.
 
+## 0.13.1 — Unreleased
+
+- Fixed image-creation cancellation leaving a worker running in the background.
+  Cancellation now stops the owned processes and cleans up staged output before
+  the job reports cancellation.
+- Added Cancel to the image-creation progress window. User cancellation closes
+  normally; genuine failures and timeouts remain visible as errors.
+
 ## 0.13.0 — 2026-11-14
 
 - Added a Change Log tab to About, showing the release history offline.

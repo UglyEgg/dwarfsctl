@@ -895,9 +895,12 @@ void DwarfsManagerWindow::createImage()
         {i18n("Create DwarFS Image"), arguments, DwarfsctlRunner::buildTimeoutMs()}, this);
     KJobWidgets::setWindow(job, this);
     connect(job, &dwarfsplugin::DwarfsctlJob::buildPhase, feedback, &dwarfsplugin::BuildFeedback::phase);
+    connect(feedback, &dwarfsplugin::BuildFeedback::cancelRequested,
+            job, [job] { job->kill(KJob::EmitResult); });
     connect(job, &KJob::result, this, [this, job, feedback, output = options.outputPath](KJob *) {
         if (job->error() != 0) {
             feedback->failed();
+            if (job->error() == KJob::KilledJobError) return;
             const auto envelope = job->envelope();
             dwarfsplugin::criticalModalWithDetails(this, i18n("Could Not Create Image"),
                 envelope.error.message.isEmpty() ? job->errorText() : envelope.error.message, envelope);
@@ -922,6 +925,7 @@ void DwarfsManagerWindow::runImageJob(
         setBusy(false);
         const auto envelope = job->envelope();
         if (job->error() != 0) {
+            if (job->error() == KJob::KilledJobError) return;
             dwarfsplugin::criticalModalWithDetails(this, title,
                 envelope.error.message.isEmpty() ? job->errorText() : envelope.error.message,
                 envelope);

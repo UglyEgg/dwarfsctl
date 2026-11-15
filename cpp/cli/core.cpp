@@ -9,12 +9,30 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <csignal>
+#include <sys/prctl.h>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <sys/file.h>
 #include <unistd.h>
 namespace ctl {
+namespace {
+volatile std::sig_atomic_t cancellation_signal = 0;
+void request_cancellation(int signal) { cancellation_signal = signal; }
+}
+void install_cancellation_handlers() {
+  struct sigaction action {};
+  action.sa_handler = request_cancellation;
+  ::sigemptyset(&action.sa_mask);
+  if (::sigaction(SIGTERM, &action, nullptr) != 0 ||
+      ::sigaction(SIGINT, &action, nullptr) != 0)
+    throw Error(9, "cannot install cancellation handlers");
+}
+void cancellation_point() {
+  if (cancellation_signal)
+    throw Error(9, "Operation cancelled", {{"cancelled", true}});
+}
 std::string Input::get(std::string const &k, std::string fallback) const {
   auto it = options.find(k);
   return it == options.end() ? fallback : it->second.back();
@@ -60,7 +78,18 @@ fs::path runtime_mount_root() {
 }
 Run execute(std::string const &program, std::vector<std::string> const &args,
             std::optional<fs::path> output, std::optional<fs::path> cwd) {
+  cancellation_point();
+  const pid_t parent = ::getpid();
+  // A GUI job gives the CLI its own session. Keep that whole hierarchy in the
+  // job's group; direct shell invocations instead give the engine a private
+  // group so cancellation can never signal the caller's shell.
+  const bool owns_session = ::getsid(0) == parent && ::getpgrp() == parent;
   QProcess proc;
+  proc.setChildProcessModifier([parent, owns_session] {
+    if (!owns_session && ::setpgid(0, 0) != 0) ::_exit(126);
+    if (::prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || ::getppid() != parent)
+      ::_exit(126);
+  });
   proc.setProgram(qs(program));
   QStringList argv;
   for (auto const &a : args)
@@ -77,12 +106,24 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
                 "could not start " + program + ": " + str(proc.errorString()));
   // QProcess drains both channels while waiting, avoiding pipe deadlocks. File
   // output bypasses memory capture for large cat/checksum operations.
+  const pid_t engine_group = owns_session ? ::getpgrp() : static_cast<pid_t>(proc.processId());
   QByteArray capturedError, pending;
   std::string phase;
   const bool building = !args.empty() && args[0] == "mkdwarfs" &&
                         std::find(args.begin(), args.end(), "-i") != args.end();
   do {
     proc.waitForFinished(100);
+    if (cancellation_signal) {
+      // Signal only a group created for this operation. In a GUI session this
+      // also signals us; our handler merely records the same cancellation.
+      if (engine_group > 0) ::kill(-engine_group, SIGTERM);
+      if (proc.state() != QProcess::NotRunning && !proc.waitForFinished(600)) {
+        if (!owns_session && engine_group > 0) ::kill(-engine_group, SIGKILL);
+        proc.kill();
+        proc.waitForFinished(1000);
+      }
+      cancellation_point(); // unwind staging files and locks on the normal thread
+    }
     auto chunk = proc.readAllStandardError();
     capturedError += chunk;
     if (building) {
@@ -108,6 +149,7 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
       }
     }
   } while (proc.state() != QProcess::NotRunning);
+  cancellation_point();
   Run result{proc.exitStatus() == QProcess::NormalExit ? proc.exitCode() : 9,
              proc.readAllStandardOutput(), capturedError, J::object()};
   std::vector<std::string> full{program};
@@ -157,6 +199,7 @@ Temp::~Temp() {
   fs::remove(path, ec);
 }
 void publish(fs::path const &staged, fs::path const &dest, bool overwrite) {
+  cancellation_point();
   // Both files are siblings. link() publishes atomically without clobbering;
   // rename() atomically replaces the directory entry, including symlinks.
   int rc = overwrite ? ::rename(staged.c_str(), dest.c_str())

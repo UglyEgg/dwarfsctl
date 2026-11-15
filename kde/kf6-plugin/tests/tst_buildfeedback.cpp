@@ -3,6 +3,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPointer>
+#include <QPushButton>
 using namespace dwarfsplugin;
 class FeedbackTest : public QObject {
     Q_OBJECT
@@ -23,6 +24,28 @@ private Q_SLOTS:
         QCoreApplication::processEvents();
         if (!qEnvironmentVariableIsEmpty("DWARFSCTL_TEST_SCREENSHOTS")) window->grab().save(qEnvironmentVariable("DWARFSCTL_TEST_SCREENSHOTS") + QStringLiteral("/build-summary.png"));
         QVERIFY(window->close());
+    }
+    void cancellationIsRequestedOnceAndKeepsTheWindowUntilTheJobStops() {
+        auto *window = new BuildFeedback(QStringLiteral("/tmp/cancel.dwarfs"));
+        QSignalSpy cancelled(window, &BuildFeedback::cancelRequested);
+        auto *button = window->findChild<QPushButton *>(QStringLiteral("cancelBuild"));
+        QVERIFY(button);
+        QVERIFY(button->isEnabled());
+        if (!qEnvironmentVariableIsEmpty("DWARFSCTL_TEST_SCREENSHOTS")) {
+            window->resize(480, window->sizeHint().height());
+            window->grab().save(qEnvironmentVariable("DWARFSCTL_TEST_SCREENSHOTS") + QStringLiteral("/build-cancel-ready.png"));
+        }
+        button->click();
+        if (!qEnvironmentVariableIsEmpty("DWARFSCTL_TEST_SCREENSHOTS"))
+            window->grab().save(qEnvironmentVariable("DWARFSCTL_TEST_SCREENSHOTS") + QStringLiteral("/build-cancelling.png"));
+        QCOMPARE(cancelled.count(), 1);
+        QVERIFY(!button->isEnabled());
+        QVERIFY(window->isVisible());
+        window->phase(QStringLiteral("compressing"));
+        QVERIFY(window->findChild<QLabel *>(QStringLiteral("buildStatus"))->text().contains(QStringLiteral("Cancelling")));
+        QVERIFY(!window->close());
+        QCOMPARE(cancelled.count(), 1);
+        window->failed();
     }
     void previewDoesNotClaimAnImageWasCreated() {
         auto *window = new BuildFeedback(QStringLiteral("/tmp/not-created.dwarfs"));

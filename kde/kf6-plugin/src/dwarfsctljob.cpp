@@ -6,6 +6,8 @@
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <csignal>
+#include <unistd.h>
 
 #include <KDialogJobUiDelegate>
 #include <KLocalizedString>
@@ -61,6 +63,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
     , m_req(std::move(req))
 {
     setAutoDelete(true);
+    setCapabilities(KJob::Killable);
     // Use a real KJob UI delegate so Dolphin presents a standard progress UI
     // (with cancellation) for long-running operations like builds.
     // KF6 API expects both flags and an optional window pointer.
@@ -71,10 +74,17 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
 
     m_timeout.setSingleShot(true);
 
+    // A distinct session makes negative-PID signals safe for this job only.
+    m_proc.setChildProcessModifier([] {
+        if (::setsid() < 0) ::_exit(126);
+    });
+    connect(&m_proc, &QProcess::started, this, [this] { m_processGroup = m_proc.processId(); });
     connect(&m_proc, &QProcess::readyReadStandardOutput, this, [this]() {
+        if (m_stopping) return;
         m_stdout += m_proc.readAllStandardOutput();
     });
     connect(&m_proc, &QProcess::readyReadStandardError, this, [this]() {
+        if (m_stopping) return;
         const auto chunk = m_proc.readAllStandardError();
         m_stderr += chunk;
         m_progressBuffer += chunk;
@@ -88,10 +98,11 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
         if (m_progressBuffer.size() > 65536) m_progressBuffer.clear();
     });
     connect(&m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
+        if (m_stopping) return;
         // Most common failure in practice: Dolphin launched from a desktop entry
         // does not inherit the same PATH as an interactive shell, so dwarfsctl
         // (often installed in ~/.local/bin) cannot be found/executed.
-        setError(1);
+        setError(KJob::UserDefinedError);
         m_errorString = m_proc.errorString();
         m_envelope.ok = false;
         m_envelope.has_error = true;
@@ -106,6 +117,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
     });
     connect(&m_proc, &QProcess::finished, this, [this](int exitCode, QProcess::ExitStatus exitStatus) {
         Q_UNUSED(exitStatus)
+        if (m_stopping) return;
         m_timeout.stop();
 
         // Drain any remaining buffered output.
@@ -126,7 +138,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
             m_hasEnvelope = true;
 
             if (!m_envelope.ok) {
-                setError(1);
+                setError(KJob::UserDefinedError);
                 m_errorString = m_envelope.error.message.isEmpty() ? i18n("Operation failed") : m_envelope.error.message;
                 setErrorText(m_envelope.error.message.isEmpty() ? QString::fromUtf8(m_stderr) : m_envelope.error.message);
                 qCWarning(DWARFS_DOLPHIN_LOG) << "dwarfsctl returned ok=false" << m_envelope.command << m_envelope.error.message;
@@ -136,7 +148,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
 
             if (exitCode != 0) {
                 // Unusual: ok=true but non-zero exit. Preserve envelope but report failure.
-                setError(1);
+                setError(KJob::UserDefinedError);
                 m_errorString = i18n("dwarfsctl failed");
                 const QString stderrText = QString::fromUtf8(m_stderr);
                 const QString stdoutText = QString::fromUtf8(m_stdout);
@@ -152,7 +164,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
         }
 
         if (exitCode != 0) {
-            setError(1);
+            setError(KJob::UserDefinedError);
             m_errorString = i18n("dwarfsctl failed");
             const QString stderrText = QString::fromUtf8(m_stderr);
             const QString stdoutText = QString::fromUtf8(m_stdout);
@@ -172,7 +184,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
 
         const auto parsed = parseEnvelope(m_stdout);
         if (!parsed.parsed) {
-            setError(1);
+            setError(KJob::UserDefinedError);
             m_errorString = i18n("Failed to parse dwarfsctl JSON output");
             setErrorText(parsed.error_message.isEmpty() ? QString::fromUtf8(m_stdout) : parsed.error_message);
             qCWarning(DWARFS_DOLPHIN_LOG) << "failed to parse dwarfsctl JSON" << parsed.error_message;
@@ -186,7 +198,7 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
         m_hasEnvelope = true;
 
         if (!m_envelope.ok) {
-            setError(1);
+            setError(KJob::UserDefinedError);
             m_errorString = m_envelope.error.message.isEmpty() ? i18n("Operation failed") : m_envelope.error.message;
             setErrorText(m_envelope.error.message);
             qCWarning(DWARFS_DOLPHIN_LOG) << "dwarfsctl returned ok=false" << m_envelope.command << m_envelope.error.message;
@@ -201,8 +213,8 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
     connect(&m_timeout, &QTimer::timeout, this, [this]() {
         if (m_proc.state() != QProcess::NotRunning) {
             qCWarning(DWARFS_DOLPHIN_LOG) << "dwarfsctl timed out" << m_req.args;
-            m_proc.kill();
-            setError(1);
+            stopOwnedProcess();
+            setError(KJob::UserDefinedError);
             m_errorString = i18n("Timed out");
             setErrorText(i18n("Operation exceeded configured timeout"));
             // Provide structured error info for the Status dialog.
@@ -217,21 +229,37 @@ DwarfsctlJob::DwarfsctlJob(Request req, QObject *parent)
     });
 }
 
-DwarfsctlJob::~DwarfsctlJob()
+bool DwarfsctlJob::stopOwnedProcess()
 {
+    m_stopping = true;
     m_timeout.stop();
-    if (m_proc.state() != QProcess::NotRunning) {
-        // A parent window may close while a background status refresh is still
-        // running. Disconnect first so QProcess cannot emit a late job result
-        // into an object graph that is being destroyed.
-        m_proc.disconnect(this);
+    if (m_proc.state() == QProcess::Starting) m_proc.waitForStarted(1000);
+    const auto group = static_cast<pid_t>(m_processGroup > 0 ? m_processGroup : m_proc.processId());
+    if (group > 0) ::kill(-group, SIGTERM);
+    if (m_proc.state() != QProcess::NotRunning && !m_proc.waitForFinished(2000)) {
+        if (group > 0) ::kill(-group, SIGKILL);
         m_proc.kill();
         m_proc.waitForFinished(1000);
     }
+    // A child can outlive the CLI group leader. Never skip group cleanup just
+    // because QProcess has already observed that leader exit.
+    if (group > 0) ::kill(-group, SIGKILL);
+    m_stdout += m_proc.readAllStandardOutput();
+    m_stderr += m_proc.readAllStandardError();
+    if (m_proc.state() == QProcess::NotRunning) m_processGroup = 0;
+    return m_proc.state() == QProcess::NotRunning;
+}
+
+DwarfsctlJob::~DwarfsctlJob()
+{
+    m_proc.disconnect(this);
+    stopOwnedProcess();
 }
 
 void DwarfsctlJob::start()
 {
+    m_stopping = false;
+    m_processGroup = 0;
     if (m_req.show_ui && !m_req.title.isEmpty()) {
         const QString cmdDisplay = QStringLiteral("%1 %2").arg(DwarfsctlRunner::dwarfsctlProgram(), m_req.args.join(QLatin1Char(' ')));
         const QString timeoutDisplay = m_req.timeout_ms > 0 ? QString::number(m_req.timeout_ms) + QStringLiteral(" ms") : i18n("(none)");
@@ -261,12 +289,12 @@ void DwarfsctlJob::start()
 
 bool DwarfsctlJob::doKill()
 {
-    if (m_proc.state() == QProcess::NotRunning) {
-        return true;
-    }
-    qCInfo(DWARFS_DOLPHIN_LOG) << "killing dwarfsctl" << m_req.args;
-    m_proc.kill();
-    return true;
+    qCInfo(DWARFS_DOLPHIN_LOG) << "cancelling dwarfsctl" << m_req.args;
+    const bool stopped = stopOwnedProcess();
+    // If the kernel has not stopped the process, do not acknowledge cancellation
+    // or permanently suppress its eventual completion/error notification.
+    if (!stopped) m_stopping = false;
+    return stopped;
 }
 
 QString DwarfsctlJob::errorString() const

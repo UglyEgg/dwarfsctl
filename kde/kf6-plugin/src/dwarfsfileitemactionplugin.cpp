@@ -167,6 +167,8 @@ static void runDwarfsctlJob(QWidget *parentWidget,
         const int outputIndex = args.indexOf(QStringLiteral("--output"));
         feedback = new dwarfsplugin::BuildFeedback(args.value(outputIndex + 1), parentWidget);
         QObject::connect(job, &DwarfsctlJob::buildPhase, feedback, &dwarfsplugin::BuildFeedback::phase);
+        QObject::connect(feedback, &dwarfsplugin::BuildFeedback::cancelRequested,
+                         job, [job] { job->kill(KJob::EmitResult); });
     }
     QObject::connect(job, &KJob::result, job, [parentWidget, onSuccess, title, feedback](KJob *j) {
         auto *dj = qobject_cast<DwarfsctlJob *>(j);
@@ -180,6 +182,7 @@ static void runDwarfsctlJob(QWidget *parentWidget,
 
         if (dj->error() != 0) {
             if (feedback) feedback->failed();
+            if (dj->error() == KJob::KilledJobError) return;
             // Strict UI rule: failures are a critical modal.
             const QString msg = !env.error.message.isEmpty() ? env.error.message : dj->errorText();
             showErrorDialogWithDetails(parentWidget,

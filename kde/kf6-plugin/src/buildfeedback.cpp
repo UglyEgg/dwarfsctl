@@ -39,15 +39,17 @@ BuildFeedback::BuildFeedback(const QString &output, QWidget *parent)
     m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_summary->setObjectName(QStringLiteral("buildSummary"));
     layout->addWidget(m_summary);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Cancel, this);
     m_close = buttons->button(QDialogButtonBox::Close);
     m_close->setEnabled(false);
+    m_cancel = buttons->button(QDialogButtonBox::Cancel);
+    m_cancel->setObjectName(QStringLiteral("cancelBuild"));
     m_reveal = buttons->addButton(i18n("Open containing folder"), QDialogButtonBox::ActionRole);
     m_reveal->setEnabled(false);
     connect(m_reveal, &QPushButton::clicked, this, [this] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_output).absolutePath()));
     });
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
+    connect(buttons, &QDialogButtonBox::rejected, this, &BuildFeedback::reject);
     layout->addWidget(buttons);
     m_clock.start();
     m_timer = new QTimer(this);
@@ -59,7 +61,7 @@ BuildFeedback::BuildFeedback(const QString &output, QWidget *parent)
 }
 void BuildFeedback::phase(const QString &value)
 {
-    if (!m_running) return;
+    if (!m_running || m_cancelling) return;
     if (value == QLatin1String("scanning")) m_status->setText(i18n("Scanning files…"));
     else if (value == QLatin1String("compressing")) m_status->setText(i18n("Compressing files…"));
     else if (value == QLatin1String("metadata")) m_status->setText(i18n("Writing image metadata…"));
@@ -68,6 +70,7 @@ void BuildFeedback::phase(const QString &value)
 void BuildFeedback::complete(const Envelope &env)
 {
     m_running = false;
+    m_cancel->hide();
     m_timer->stop();
     m_progress->setRange(0, 100);
     m_progress->setValue(100);
@@ -98,7 +101,15 @@ void BuildFeedback::failed()
     m_running = false;
     close();
 }
-void BuildFeedback::reject() { if (!m_running) QDialog::reject(); }
+void BuildFeedback::reject()
+{
+    if (!m_running) { QDialog::reject(); return; }
+    if (m_cancelling) return;
+    m_cancelling = true;
+    m_cancel->setEnabled(false);
+    m_status->setText(i18n("Cancelling image creation…"));
+    Q_EMIT cancelRequested();
+}
 void BuildFeedback::closeEvent(QCloseEvent *event)
 {
     if (m_running) event->ignore(); else QDialog::closeEvent(event);
