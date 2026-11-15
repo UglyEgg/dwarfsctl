@@ -44,6 +44,7 @@
 #include <KIconLoader>
 
 #include <KLocalizedString>
+#include <KIconTheme>
 
 #include "dwarfsctl_exec.h"
 
@@ -302,20 +303,28 @@ private slots:
     {
         refresh();
         m_menu->clear();
+        m_menu->setToolTipsVisible(true);
+        const auto menuLabel = [this](const QString &text) {
+            const int width = m_menu->fontMetrics().averageCharWidth() * 48;
+            return m_menu->fontMetrics().elidedText(text, Qt::ElideMiddle, width)
+                .replace(QLatin1Char('&'), QStringLiteral("&&"));
+        };
 
         if (m_mounts.isEmpty()) {
             auto* none = m_menu->addAction(tr("No mounted DwarFS volumes"));
             none->setEnabled(false);
         } else {
-            auto* mountedMenu = m_menu->addMenu(tr("Mounted volumes"));
+            auto* mountedMenu = m_menu->addMenu(tr("Mounted Volumes"));
+            mountedMenu->setToolTipsVisible(true);
             for (const auto& r : m_mounts) {
                 const QFileInfo fi(r.image);
                 QString label = fi.completeBaseName();
                 if (label.isEmpty())
                     label = fi.fileName();
-                auto* volume = mountedMenu->addMenu(label);
+                auto* volume = mountedMenu->addMenu(menuLabel(label));
+                volume->menuAction()->setToolTip(r.image);
 
-                auto* open = volume->addAction(tr("Open Volume"));
+                auto* open = volume->addAction(tr("Open in Dolphin"));
                 connect(open, &QAction::triggered, this, [mp = r.mountpoint]() {
                     QDesktopServices::openUrl(QUrl::fromLocalFile(mp));
                 });
@@ -339,22 +348,32 @@ private slots:
 
         m_menu->addSeparator();
 
+        auto* utility = m_menu->addAction(tr("Open DwarFS Utility…"));
+        connect(utility, &QAction::triggered, this, [this]() {
+            if (!QProcess::startDetached(QStringLiteral("dwarfsctl-manager"), QStringList{})) {
+                m_item->showMessage(tr("Could Not Open DwarFS Utility"),
+                                    tr("The application could not be started."),
+                                    QStringLiteral("dialog-error"), 5000);
+            }
+        });
+
         // Recently mounted images (MRU list).
         auto* recentMenu = m_menu->addMenu(tr("Recent Images"));
         const int limit = dwarfsctl_tray::recentlyMountedLimit();
         const QStringList images = dwarfsctl_tray::recentlyMountedImages();
 
         recentMenu->setEnabled(limit > 0);
+        recentMenu->setToolTipsVisible(true);
         if (limit <= 0) {
             auto* disabled = recentMenu->addAction(tr("Disabled"));
             disabled->setEnabled(false);
         } else {
             if (images.isEmpty()) {
-                auto* empty = recentMenu->addAction(tr("(empty)"));
+                auto* empty = recentMenu->addAction(tr("No Recent Images"));
                 empty->setEnabled(false);
             } else {
                 for (const auto& img : images) {
-                    auto* a = recentMenu->addAction(dwarfsctl_tray::recentLabelForImage(img));
+                    auto* a = recentMenu->addAction(menuLabel(dwarfsctl_tray::recentLabelForImage(img)));
                     a->setToolTip(img);
                     connect(a, &QAction::triggered, this, [this, img]() {
                         const auto before = mountpointSet();
@@ -364,7 +383,7 @@ private slots:
             }
 
             recentMenu->addSeparator();
-            auto* clear = recentMenu->addAction(tr("Clear list"));
+            auto* clear = recentMenu->addAction(tr("Clear Recent Images"));
             clear->setEnabled(!images.isEmpty());
             connect(clear, &QAction::triggered, this, []() { dwarfsctl_tray::clearRecentlyMountedImages(); });
         }
@@ -685,8 +704,11 @@ private:
 
 int main(int argc, char** argv)
 {
+    KIconTheme::initTheme();
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("dwarfsctl-tray"));
+    app.setApplicationDisplayName(QStringLiteral("DwarFSctl"));
+    app.setOrganizationDomain(QStringLiteral("entropy.quest"));
     app.setDesktopFileName(QStringLiteral("dwarfsctl-tray"));
     app.setWindowIcon(QIcon::fromTheme(
         QStringLiteral("dwarfsctl"),

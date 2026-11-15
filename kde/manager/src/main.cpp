@@ -9,9 +9,11 @@
 #include <QIcon>
 
 #include <KLocalizedString>
+#include <KIconTheme>
 
 int main(int argc, char **argv)
 {
+    KIconTheme::initTheme();
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("dwarfsctl-manager"));
     app.setApplicationDisplayName(QObject::tr("DwarFS Utility"));

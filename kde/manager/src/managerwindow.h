@@ -18,6 +18,7 @@ class ContentRingsWidget;
 class ElidingLabel;
 class QFrame;
 class QLabel;
+class KMessageWidget;
 class QListWidget;
 class QProgressBar;
 class QPushButton;
@@ -73,7 +74,7 @@ private:
     QStackedWidget *m_pages = nullptr;
     QLabel *m_emptyMessage = nullptr;
     QLabel *m_sidebarSummary = nullptr;
-    QLabel *m_name = nullptr;
+    ElidingLabel *m_name = nullptr;
     ElidingLabel *m_path = nullptr;
     QLabel *m_stateIcon = nullptr;
     QLabel *m_state = nullptr;
@@ -89,7 +90,7 @@ private:
     QTabWidget *m_imageViews = nullptr;
     CompressionOverviewWidget *m_compressionOverview = nullptr;
     ContentRingsWidget *m_contentRings = nullptr;
-    QLabel *m_error = nullptr;
+    KMessageWidget *m_error = nullptr;
     QProgressBar *m_progress = nullptr;
     QPushButton *m_primaryButton = nullptr;
     QPushButton *m_browseButton = nullptr;

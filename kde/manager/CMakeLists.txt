@@ -24,6 +24,7 @@ find_package(KF6KIO REQUIRED)
 find_package(KF6JobWidgets REQUIRED)
 find_package(KF6Notifications REQUIRED)
 find_package(KF6WidgetsAddons REQUIRED)
+find_package(KF6IconThemes 6.3 REQUIRED)
 
 set(PLUGIN_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../kf6-plugin/src")
 set(TRAY_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../tray/src")
@@ -71,7 +72,7 @@ target_link_libraries(dwarfsctl-manager-ui PUBLIC
 )
 
 qt_add_executable(dwarfsctl-manager src/main.cpp)
-target_link_libraries(dwarfsctl-manager PRIVATE dwarfsctl-manager-ui)
+target_link_libraries(dwarfsctl-manager PRIVATE dwarfsctl-manager-ui KF6::IconThemes)
 target_compile_definitions(dwarfsctl-manager PRIVATE
     DWARFSCTL_MANAGER_VERSION="${DWARFSCTL_MANAGER_VERSION}")
 

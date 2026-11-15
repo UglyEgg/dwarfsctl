@@ -4,6 +4,8 @@ This file records release changes.
 
 ## 0.13.1 — Unreleased
 
+- Aligned Utility and tray styling, improved theme contrast, and kept image
+  details readable in smaller windows.
 - Fixed image-creation cancellation leaving a worker running in the background.
   Cancellation now stops the owned processes and cleans up staged output before
   the job reports cancellation.

@@ -16,6 +16,7 @@
 #include "trayagentjob.h"
 #include "traydbus.h"
 #include "visualizationwidgets.h"
+#include "uipresentation.h"
 
 #include <QAction>
 #include <QApplication>
@@ -39,6 +40,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSet>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -52,6 +54,7 @@
 
 #include <KJobWidgets>
 #include <KLocalizedString>
+#include <KMessageWidget>
 
 namespace {
 
@@ -118,7 +121,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_mountAction->setObjectName(QStringLiteral("mountAction"));
     connect(m_mountAction, &QAction::triggered, this, &DwarfsManagerWindow::mountOrUnmount);
 
-    m_browseAction = new QAction(QIcon::fromTheme(QStringLiteral("document-open-folder")), i18n("Browse"), this);
+    m_browseAction = new QAction(QIcon::fromTheme(QStringLiteral("system-file-manager")), i18n("Open in Dolphin"), this);
     m_browseAction->setObjectName(QStringLiteral("browseAction"));
     connect(m_browseAction, &QAction::triggered, this, &DwarfsManagerWindow::browseImage);
 
@@ -176,7 +179,9 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     auto *toolbar = addToolBar(i18n("Image actions"));
     toolbar->setObjectName(QStringLiteral("mainToolBar"));
     toolbar->setMovable(false);
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    const int toolbarIconSize = qMax(style()->pixelMetric(QStyle::PM_ToolBarIconSize), fontMetrics().height());
+    toolbar->setIconSize(QSize(toolbarIconSize, toolbarIconSize));
     toolbar->addAction(createAction);
     toolbar->addAction(openAction);
     toolbar->addSeparator();
@@ -188,6 +193,12 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     auto *toolbarSpacer = new QWidget(toolbar);
     toolbarSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(toolbarSpacer);
+    auto *settingsButton = new QToolButton(toolbar);
+    settingsButton->setObjectName(QStringLiteral("settingsButton"));
+    settingsButton->setDefaultAction(settingsAction);
+    settingsButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    settingsButton->setAutoRaise(true);
+    toolbar->addWidget(settingsButton);
     auto *aboutButton = new QToolButton(toolbar);
     aboutButton->setObjectName(QStringLiteral("aboutButton"));
     aboutButton->setDefaultAction(aboutAction);
@@ -212,6 +223,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_images->setObjectName(QStringLiteral("imageList"));
     m_images->setSelectionMode(QAbstractItemView::SingleSelection);
     m_images->setAlternatingRowColors(false);
+    m_images->setFrameShape(QFrame::NoFrame);
     m_images->setSpacing(2);
     m_images->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_images, &QListWidget::customContextMenuRequested, this, &DwarfsManagerWindow::showImageContextMenu);
@@ -231,6 +243,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     removeButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
     sidebarButtons->addWidget(removeButton);
     sidebarLayout->addLayout(sidebarButtons);
+    sidebar->setMinimumWidth(qMax(220, sidebarLayout->minimumSize().width()));
     splitter->addWidget(sidebar);
 
     m_pages = new QStackedWidget(splitter);
@@ -252,21 +265,19 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
 
     auto *details = new QWidget(m_pages);
     auto *detailsLayout = new QVBoxLayout(details);
-    detailsLayout->setContentsMargins(28, 24, 28, 24);
-    detailsLayout->setSpacing(16);
+    detailsLayout->setContentsMargins(dwarfsctl_kde::contentMargins(details));
+    detailsLayout->setSpacing(2 * dwarfsctl_kde::layoutSpacing(details));
     auto *header = new QHBoxLayout();
     auto *imageIcon = new QLabel(details);
-    imageIcon->setPixmap(QIcon::fromTheme(QStringLiteral("dwarfsctlimage")).pixmap(64, 64));
-    imageIcon->setFixedSize(72, 72);
+    const int headerIconSize = style()->pixelMetric(QStyle::PM_MessageBoxIconSize);
+    imageIcon->setPixmap(QIcon::fromTheme(QStringLiteral("dwarfsctlimage")).pixmap(headerIconSize, headerIconSize));
+    imageIcon->setFixedSize(headerIconSize, headerIconSize);
     imageIcon->setAlignment(Qt::AlignCenter);
     header->addWidget(imageIcon);
     auto *titleColumn = new QVBoxLayout();
-    m_name = new QLabel(details);
+    m_name = new ElidingLabel(details);
     m_name->setObjectName(QStringLiteral("imageName"));
-    QFont nameFont = m_name->font();
-    nameFont.setPointSize(nameFont.pointSize() + 4);
-    nameFont.setBold(true);
-    m_name->setFont(nameFont);
+    m_name->setFont(dwarfsctl_kde::headingFont(m_name->font()));
     titleColumn->addWidget(m_name);
     m_path = new ElidingLabel(details);
     m_path->setObjectName(QStringLiteral("imagePath"));
@@ -274,10 +285,10 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     header->addLayout(titleColumn, 1);
     auto *stateBox = new QFrame(details);
     stateBox->setObjectName(QStringLiteral("mountStateBox"));
-    stateBox->setFrameShape(QFrame::StyledPanel);
+    stateBox->setFrameShape(QFrame::NoFrame);
     auto *stateLayout = new QHBoxLayout(stateBox);
-    stateLayout->setContentsMargins(10, 7, 10, 7);
-    stateLayout->setSpacing(7);
+    stateLayout->setContentsMargins(0, 0, 0, 0);
+    stateLayout->setSpacing(dwarfsctl_kde::layoutSpacing(stateBox));
     m_stateIcon = new QLabel(stateBox);
     m_stateIcon->setFixedSize(24, 24);
     m_stateIcon->setAlignment(Qt::AlignCenter);
@@ -285,22 +296,15 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_state = new QLabel(stateBox);
     m_state->setObjectName(QStringLiteral("mountState"));
     m_state->setAlignment(Qt::AlignCenter);
-    QFont stateFont = m_state->font();
-    stateFont.setBold(true);
-    m_state->setFont(stateFont);
     stateLayout->addWidget(m_state);
     header->addWidget(stateBox);
     detailsLayout->addLayout(header);
 
-    auto *line = new QFrame(details);
-    line->setFrameShape(QFrame::HLine);
-    detailsLayout->addWidget(line);
-
     m_mountFrame = new QFrame(details);
     m_mountFrame->setObjectName(QStringLiteral("mountLocationStrip"));
-    m_mountFrame->setFrameShape(QFrame::StyledPanel);
+    m_mountFrame->setFrameShape(QFrame::NoFrame);
     auto *mountLayout = new QHBoxLayout(m_mountFrame);
-    mountLayout->setContentsMargins(10, 6, 6, 6);
+    mountLayout->setContentsMargins(0, 0, 0, 0);
     auto *mountIcon = new QLabel(m_mountFrame);
     mountIcon->setPixmap(QIcon::fromTheme(QStringLiteral("dwarfsctl-volume")).pixmap(22, 22));
     mountLayout->addWidget(mountIcon);
@@ -329,7 +333,9 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_mountFrame->hide();
     detailsLayout->addWidget(m_mountFrame);
 
-    m_error = new QLabel(details);
+    m_error = new KMessageWidget(details);
+    m_error->setMessageType(KMessageWidget::Error);
+    m_error->setCloseButtonVisible(false);
     m_error->setObjectName(QStringLiteral("inlineError"));
     m_error->setWordWrap(true);
     m_error->setTextFormat(Qt::PlainText);
@@ -357,6 +363,8 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     overviewLayout->addWidget(technicalHeading);
     auto *form = new QFormLayout();
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setHorizontalSpacing(2 * dwarfsctl_kde::layoutSpacing(overviewPage));
+    form->setVerticalSpacing(dwarfsctl_kde::layoutSpacing(overviewPage));
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     m_contents = valueLabel(overviewPage);
     m_imageSize = valueLabel(overviewPage);
@@ -374,7 +382,13 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     form->addRow(i18n("Created by:"), m_createdBy);
     overviewLayout->addLayout(form);
     overviewLayout->addStretch(1);
-    m_imageViews->addTab(overviewPage, QIcon::fromTheme(QStringLiteral("view-statistics")), i18n("Overview"));
+    auto *overviewScroll = new QScrollArea(m_imageViews);
+    overviewScroll->setObjectName(QStringLiteral("overviewScroll"));
+    overviewScroll->setFrameShape(QFrame::NoFrame);
+    overviewScroll->setWidgetResizable(true);
+    overviewScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    overviewScroll->setWidget(overviewPage);
+    m_imageViews->addTab(overviewScroll, QIcon::fromTheme(QStringLiteral("view-statistics")), i18n("Overview"));
 
     auto *contentsPage = new QWidget(m_imageViews);
     auto *contentsLayout = new QVBoxLayout(contentsPage);
@@ -396,7 +410,7 @@ DwarfsManagerWindow::DwarfsManagerWindow(QWidget *parent)
     m_primaryButton = new QPushButton(details);
     connect(m_primaryButton, &QPushButton::clicked, this, &DwarfsManagerWindow::mountOrUnmount);
     buttons->addWidget(m_primaryButton);
-    m_browseButton = new QPushButton(QIcon::fromTheme(QStringLiteral("document-open-folder")), i18n("Browse Contents"), details);
+    m_browseButton = new QPushButton(QIcon::fromTheme(QStringLiteral("system-file-manager")), i18n("Open in Dolphin"), details);
     connect(m_browseButton, &QPushButton::clicked, this, &DwarfsManagerWindow::browseImage);
     buttons->addWidget(m_browseButton);
     buttons->addStretch(1);
@@ -523,7 +537,7 @@ void DwarfsManagerWindow::refreshImages()
         }
     };
     if (!mounted.isEmpty()) {
-        appendHeader(i18np("Mounted Image", "Mounted Images", mounted.size()));
+        appendHeader(i18n("Mounted Volumes"));
         for (const QString &path : mounted) append(path, true);
     }
     const QStringList recent = rememberedImages();
@@ -611,7 +625,7 @@ void DwarfsManagerWindow::selectionChanged()
     m_pages->setCurrentIndex(1);
     m_currentStatus = {};
     m_currentEnvelope = {};
-    m_name->setText(QFileInfo(path).completeBaseName());
+    m_name->setFullText(QFileInfo(path).completeBaseName());
     m_path->setFullText(QDir::toNativeSeparators(path));
     m_mountFrame->hide();
     m_compressionOverview->setValues(-1, -1);
@@ -768,9 +782,8 @@ void DwarfsManagerWindow::updateActions()
         m_primaryButton->setText(mounted ? i18n("Unmount") : i18n("Mount"));
         m_primaryButton->setIcon(QIcon::fromTheme(mounted ? QStringLiteral("media-eject") : QStringLiteral("media-mount")));
         m_browseButton->setEnabled(enabled);
-        m_browseButton->setText(mounted ? i18n("Show in Dolphin") : i18n("Browse Contents"));
-        m_browseButton->setIcon(QIcon::fromTheme(mounted ? QStringLiteral("system-file-manager")
-                                                        : QStringLiteral("document-open-folder")));
+        m_browseButton->setText(i18n("Open in Dolphin"));
+        m_browseButton->setIcon(QIcon::fromTheme(QStringLiteral("system-file-manager")));
     }
 }
 
