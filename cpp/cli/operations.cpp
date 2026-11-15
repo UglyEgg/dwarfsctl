@@ -272,6 +272,7 @@ J read_command(Input const &in, Config const &) {
   return {{"entries", selected}};
 }
 J build_command(Input const &in, Config const &cfg) {
+  cancellation_point();
   fs::path source = in.positions[0];
   if (!fs::is_directory(source))
     throw Error(4, "source must be an existing directory");
@@ -331,6 +332,7 @@ J build_command(Input const &in, Config const &cfg) {
   }
   std::cerr << J({{"event", "build_progress"}, {"phase", "verifying"}}).dump()
             << std::endl;
+  cancellation_point();
   const auto metadata = inspect(temp.path);
   uint64_t files = 0, original = 0;
   std::function<void(J const &)> count = [&](J const &entry) {

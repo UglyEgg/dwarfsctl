@@ -41,6 +41,9 @@ Q_SIGNALS:
     void buildPhase(const QString &phase);
 
 private:
+    bool stopOwnedProcess();
+    bool m_stopping = false;
+    qint64 m_processGroup = 0;
     Request m_req;
     QString m_errorString;
     Envelope m_envelope;

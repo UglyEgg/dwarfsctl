@@ -49,6 +49,7 @@ int main(int argc, char **argv) {
   std::string command = "bootstrap";
   J image = nullptr, warnings = J::array();
   try {
+    install_cancellation_handlers();
     auto in = parse(raw);
     command = in.command;
     std::replace(command.begin(), command.end(), ' ', '_');

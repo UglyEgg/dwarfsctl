@@ -55,6 +55,8 @@ Run engine(std::string const &, std::vector<std::string> const &,
 Run execute(std::string const &, std::vector<std::string> const &,
             std::optional<fs::path> output = {},
             std::optional<fs::path> cwd = {});
+void install_cancellation_handlers();
+void cancellation_point();
 void require_success(Run const &);
 J inspect(fs::path const &);
 J listing(J const &tree);

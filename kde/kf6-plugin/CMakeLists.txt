@@ -266,3 +266,15 @@ if(BUILD_TESTING)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${CMAKE_BINARY_DIR}/bin;XDG_DATA_HOME=${TEST_XDG_DATA_HOME}"
         TIMEOUT 30)
 endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_dwarfsctljob tests/tst_dwarfsctljob.cpp
+        src/dwarfsctljob.cpp src/dwarfsctlrunner.cpp src/dwarfsctljson.cpp src/logging.cpp)
+    target_include_directories(tst_dwarfsctljob PRIVATE src ../common)
+    target_link_libraries(tst_dwarfsctljob PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus
+        Qt6::Test KF6::CoreAddons KF6::I18n KF6::JobWidgets KF6::KIOWidgets)
+    target_compile_definitions(tst_dwarfsctljob PRIVATE QT_NO_KEYWORDS)
+    add_test(NAME tst_dwarfsctljob COMMAND tst_dwarfsctljob)
+    set_tests_properties(tst_dwarfsctljob PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+endif()
