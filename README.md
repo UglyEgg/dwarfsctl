@@ -41,12 +41,12 @@ to see its path and contents.
 
 ![DwarFS Utility showing the Content Rings view](docs/screenshots/utility-contents.png)
 
-Screenshots show a sample image containing project documentation, artwork and
-source files, rendered with KDE's Breeze style.
+Screenshots show DwarFSctl 0.13.1 with a sample image containing project
+documentation, artwork and source files, rendered with KDE's Breeze style.
 
 ## Install
 
-Version 0.13.0 is available. Downloads are verified using a GPG-signed checksum
+Version 0.13.1 is available. Downloads are verified using a GPG-signed checksum
 manifest.
 
 Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,

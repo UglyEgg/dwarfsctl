@@ -2,7 +2,7 @@
 
 This file records release changes.
 
-## 0.13.1 — Unreleased
+## 0.13.1 — 2026-11-15
 
 - Aligned Utility and tray styling, improved theme contrast, and kept image
   details readable in smaller windows.
