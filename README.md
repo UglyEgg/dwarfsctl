@@ -41,8 +41,8 @@ to see its path and contents.
 
 ![DwarFS Utility showing the Content Rings view](docs/screenshots/utility-contents.png)
 
-Screenshots show a sample image containing project documentation, artwork and
-source files, rendered with KDE's Breeze style.
+Screenshots show DwarFSctl 0.13.1 with a sample image containing project
+documentation, artwork and source files, rendered with KDE's Breeze style.
 
 ## Install
 
