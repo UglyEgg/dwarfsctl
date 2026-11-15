@@ -38,7 +38,9 @@ chown -R root:root %{buildroot}
 %config(noreplace) /etc/dwarfs-dolphin/config.toml
 /etc/xdg/autostart/dwarfsctl-tray.desktop
 %changelog
-* Fri Oct 16 2026 UglyEgg <uglyegg@users.noreply.github.com> - $version-1
+* Sun Nov 15 2026 UglyEgg <uglyegg@users.noreply.github.com> - $version-1
+- Improve image creation cancellation and unify the KDE interface.
+* Sat Nov 14 2026 UglyEgg <uglyegg@users.noreply.github.com> - 0.13.0-1
 - First public release.
 SPEC
   rpmbuild -bb --define "_topdir $work" --define '_build_id_links none' --define 'debug_package %{nil}' "$work/SPECS/package.spec"
