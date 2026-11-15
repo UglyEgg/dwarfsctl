@@ -30,6 +30,7 @@ public:
     qint64 originalBytes() const;
     qint64 imageBytes() const;
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent *event) override;

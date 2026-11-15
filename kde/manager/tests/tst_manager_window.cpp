@@ -17,6 +17,7 @@
 #include <QtTest>
 
 #include <KLocalizedString>
+#include <KMessageWidget>
 
 class ManagerWindowTest final : public QObject {
     Q_OBJECT
@@ -57,6 +58,31 @@ private Q_SLOTS:
         QVERIFY(!mount->isEnabled());
         QVERIFY(!browse->isEnabled());
         QVERIFY(!extract->isEnabled());
+    }
+
+    void longImageNamesRemainReadableAtMinimumWidth()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString name = QStringLiteral("Project archive with supporting documents ").repeated(5).trimmed();
+        const QString path = directory.filePath(name + QStringLiteral(".dwarfs"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("invalid image");
+        file.close();
+        DwarfsManagerWindow window;
+        window.resize(880, 600);
+        window.openImages({path});
+        window.show();
+        QTest::qWait(100);
+        auto *title = window.findChild<QLabel *>(QStringLiteral("imageName"));
+        auto *state = window.findChild<QFrame *>(QStringLiteral("mountStateBox"));
+        QVERIFY(title && state);
+        QCOMPARE(title->toolTip(), name);
+        QCOMPARE(title->accessibleName(), name);
+        QVERIFY(title->text() != name);
+        QVERIFY(title->geometry().right() < state->geometry().left());
+        QCOMPARE(window.width(), 880);
     }
 
     void recentImageCanBeRemovedWithoutTouchingTheFile()
@@ -129,7 +155,7 @@ private Q_SLOTS:
         window.openImages({image});
         window.show();
         QTest::qWait(3000);
-        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("inlineError"))->isVisible());
+        QVERIFY(!window.findChild<KMessageWidget *>(QStringLiteral("inlineError"))->isVisible());
         auto *rings = static_cast<ContentRingsWidget *>(window.findChild<QWidget *>(QStringLiteral("contentRings")));
         QVERIFY(rings);
         QCOMPARE(rings->topLevelCount(), 3);

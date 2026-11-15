@@ -18,7 +18,7 @@ find_package(KF6StatusNotifierItem REQUIRED)
 find_package(KF6CoreAddons REQUIRED)
 find_package(KF6I18n REQUIRED)
 find_package(KF6KIO REQUIRED)
-find_package(KF6IconThemes REQUIRED)
+find_package(KF6IconThemes 6.3 REQUIRED)
 find_package(KF6WidgetsAddons REQUIRED)
 
 # Keep the About dialog's plugin version string aligned with the Dolphin plugin.

@@ -94,7 +94,7 @@ QString profileLabel(const QString& name)
 SettingsDialog::SettingsDialog(QWidget* parent)
     : KPageDialog(parent)
 {
-    setWindowTitle(tr("DwarFS Settings"));
+    setWindowTitle(tr("DwarFSctl Settings"));
     setFaceType(KPageDialog::List);
     setStandardButtons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     setMinimumSize(660, 480);

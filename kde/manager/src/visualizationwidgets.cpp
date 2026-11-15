@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "visualizationwidgets.h"
+#include "uipresentation.h"
 
 #include <QFontMetrics>
 #include <QJsonArray>
@@ -34,15 +35,13 @@ QPainterPath ringSegment(const QPointF &center, qreal innerRadius, qreal outerRa
     return path;
 }
 
-QColor ringColor(int index)
+QColor ringColor(int index, const QPalette &palette)
 {
-    static const QColor colors[] = {
-        QColor(QStringLiteral("#3daee9")), QColor(QStringLiteral("#577ee8")),
-        QColor(QStringLiteral("#9b6bd6")), QColor(QStringLiteral("#f0b84b")),
-        QColor(QStringLiteral("#49b77b")), QColor(QStringLiteral("#e06c75")),
-        QColor(QStringLiteral("#48bfc5")), QColor(QStringLiteral("#c787d9")),
-    };
-    return colors[index % std::size(colors)];
+    const QColor accent = palette.color(QPalette::Highlight);
+    const qreal hue = accent.hslHueF() < 0 ? 0.56 : accent.hslHueF();
+    const qreal saturation = qBound(0.45, accent.hslSaturationF(), 0.75);
+    const bool dark = palette.color(QPalette::Window).lightnessF() < 0.5;
+    return QColor::fromHslF(std::fmod(hue + index * 0.381966, 1.0), saturation, dark ? 0.64 : 0.42);
 }
 
 quint64 jsonUnsigned(const QJsonValue &value)
@@ -71,6 +70,7 @@ void ElidingLabel::setFullText(const QString &text)
     m_fullText = text;
     setToolTip(text);
     setAccessibleName(text);
+    setAccessibleName(text);
     updateElision();
 }
 
@@ -94,7 +94,6 @@ CompressionOverviewWidget::CompressionOverviewWidget(QWidget *parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("compressionOverview"));
-    setMinimumHeight(150);
     setAccessibleName(i18n("Compression overview"));
 }
 
@@ -107,7 +106,19 @@ void CompressionOverviewWidget::setValues(qint64 originalBytes, qint64 imageByte
 
 qint64 CompressionOverviewWidget::originalBytes() const { return m_originalBytes; }
 qint64 CompressionOverviewWidget::imageBytes() const { return m_imageBytes; }
-QSize CompressionOverviewWidget::sizeHint() const { return QSize(640, 170); }
+QSize CompressionOverviewWidget::minimumSizeHint() const
+{
+    const qreal row = fontMetrics().height();
+    const qreal bar = qMax<qreal>(8, row * 0.55);
+    const int height = static_cast<int>(std::ceil(16 + 4.3 * row + 2 * bar
+                                                + 5 * dwarfsctl_kde::layoutSpacing(this)));
+    return QSize(120, qMax(150, height));
+}
+
+QSize CompressionOverviewWidget::sizeHint() const
+{
+    return QSize(640, minimumSizeHint().height());
+}
 
 void CompressionOverviewWidget::paintEvent(QPaintEvent *event)
 {
@@ -123,62 +134,61 @@ void CompressionOverviewWidget::paintEvent(QPaintEvent *event)
 
     const qint64 saved = qMax<qint64>(0, m_originalBytes - m_imageBytes);
     const double savedPercent = 100.0 * static_cast<double>(saved) / static_cast<double>(m_originalBytes);
-    const qreal barLeft = area.left() + 10.0;
-    const qreal barWidth = qMax<qreal>(120.0, area.width() - 20.0);
-    const qreal barHeight = 34.0;
-    const QRectF originalBar(barLeft, area.top() + 32.0, barWidth, barHeight);
-    const qreal imageRatio = qBound(0.0, static_cast<double>(m_imageBytes) / static_cast<double>(m_originalBytes), 1.0);
-    const QRectF imageTrack(barLeft, area.top() + 101.0, barWidth, barHeight);
-    const QRectF imageBar(imageTrack.left(), imageTrack.top(), imageTrack.width() * imageRatio, imageTrack.height());
-    const QRectF savedBar(imageBar.right(), imageTrack.top(), imageTrack.right() - imageBar.right(), imageTrack.height());
+    const double ratio = qBound(0.0, static_cast<double>(m_imageBytes) / static_cast<double>(m_originalBytes), 1.0);
+    const qreal gap = dwarfsctl_kde::layoutSpacing(this);
+    const qreal rowHeight = fontMetrics().height();
+    const qreal barHeight = qMax<qreal>(8, rowHeight * 0.55);
+    const qreal rowStep = rowHeight + barHeight + 2 * gap;
+    const qreal left = area.left();
+    const qreal width = area.width();
 
-    QColor originalColor(QStringLiteral("#577ee8"));
-    QColor imageColor(QStringLiteral("#3daee9"));
-    QColor savedColor(QStringLiteral("#49b77b"));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(originalColor);
-    painter.drawRoundedRect(originalBar, 7, 7);
-    painter.setBrush(palette().color(QPalette::AlternateBase));
-    painter.drawRoundedRect(imageTrack, 7, 7);
-    painter.setBrush(imageColor);
-    painter.drawRoundedRect(imageBar, 7, 7);
-    if (savedBar.width() > 1.0) {
-        painter.setBrush(savedColor);
-        painter.drawRoundedRect(savedBar, 7, 7);
-    }
-
-    QFont labelFont = font();
-    labelFont.setBold(true);
-    painter.setFont(labelFont);
-    painter.setPen(Qt::white);
-    painter.drawText(originalBar.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, i18n("Original"));
-    painter.drawText(originalBar.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignRight,
-                     QLocale().formattedDataSize(m_originalBytes));
-    painter.drawText(imageBar.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, i18n("DwarFS image"));
-    if (imageBar.width() > 210.0) {
-        painter.drawText(imageBar.adjusted(12, 0, -12, 0), Qt::AlignVCenter | Qt::AlignRight,
-                         QLocale().formattedDataSize(m_imageBytes));
-    }
-
-    painter.setPen(palette().color(QPalette::Text));
-    painter.setFont(font());
-    painter.drawText(QRectF(barLeft, area.top(), barWidth * 0.55, 24), Qt::AlignLeft | Qt::AlignVCenter,
-                     i18n("Whole-image compression"));
-    painter.setPen(saved > 0 ? savedColor : palette().color(QPalette::Text));
-    QFont savingsFont = font();
-    savingsFont.setBold(true);
-    savingsFont.setPointSize(savingsFont.pointSize() + 2);
-    painter.setFont(savingsFont);
     const QString savings = saved > 0
         ? i18n("%1 smaller", QLocale().toString(savedPercent, 'f', 1) + QStringLiteral("%"))
         : i18n("No size reduction");
-    painter.drawText(QRectF(barLeft + barWidth * 0.5, area.top(), barWidth * 0.5, 24),
+    const QFont heading = dwarfsctl_kde::headingFont(font());
+    const QFontMetrics headingMetrics(heading);
+    const qreal savingsWidth = qMin<qreal>(width, headingMetrics.horizontalAdvance(savings));
+    painter.setFont(heading);
+    painter.setPen(palette().color(QPalette::Text));
+    painter.drawText(QRectF(left, area.top(), width - savingsWidth - gap, rowHeight * 1.3),
+                     Qt::AlignLeft | Qt::AlignVCenter,
+                     headingMetrics.elidedText(i18n("Whole-image compression"), Qt::ElideRight,
+                                               qMax(0, static_cast<int>(width - savingsWidth - gap))));
+    painter.drawText(QRectF(area.right() - savingsWidth, area.top(), savingsWidth, rowHeight * 1.3),
                      Qt::AlignRight | Qt::AlignVCenter, savings);
 
     painter.setFont(font());
+    const auto drawRow = [&](const QString &label, const QString &value, qreal top) {
+        const qreal valueWidth = fontMetrics().horizontalAdvance(value);
+        painter.setPen(palette().color(QPalette::Text));
+        painter.drawText(QRectF(left, top, qMax<qreal>(0, width - valueWidth - gap), rowHeight),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         fontMetrics().elidedText(label, Qt::ElideRight,
+                                                qMax(0, static_cast<int>(width - valueWidth - gap))));
+        painter.drawText(QRectF(left, top, width, rowHeight), Qt::AlignRight | Qt::AlignVCenter, value);
+    };
+    const qreal firstTop = area.top() + rowHeight * 1.3 + gap;
+    drawRow(i18n("Original size"), dataSize(m_originalBytes), firstTop);
+    drawRow(i18n("DwarFS image"), dataSize(m_imageBytes), firstTop + rowStep);
+
+    const QColor accent = palette().color(QPalette::Highlight);
+    QColor originalColor = accent;
+    originalColor.setAlphaF(0.45);
+    const QRectF originalBar(left, firstTop + rowHeight + gap, width, barHeight);
+    const QRectF imageTrack(left, originalBar.top() + rowStep, width, barHeight);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(originalColor);
+    painter.drawRoundedRect(originalBar, barHeight / 2, barHeight / 2);
+    painter.setBrush(palette().color(QPalette::AlternateBase));
+    painter.drawRoundedRect(imageTrack, barHeight / 2, barHeight / 2);
+    painter.setBrush(accent);
+    painter.drawRoundedRect(QRectF(imageTrack.topLeft(), QSizeF(width * ratio, barHeight)),
+                            barHeight / 2, barHeight / 2);
+
     painter.setPen(palette().color(QPalette::PlaceholderText));
-    painter.drawText(QRectF(barLeft, imageTrack.bottom() + 5, barWidth, 22), Qt::AlignRight | Qt::AlignVCenter,
-                     saved > 0 ? i18n("%1 saved", QLocale().formattedDataSize(saved)) : QString());
+    painter.drawText(QRectF(left, imageTrack.bottom() + gap, width, rowHeight),
+                     Qt::AlignRight | Qt::AlignVCenter,
+                     saved > 0 ? i18n("%1 saved", dataSize(saved)) : QString());
 }
 
 ContentRingsWidget::ContentRingsWidget(QWidget *parent)
@@ -246,8 +256,7 @@ QSize ContentRingsWidget::sizeHint() const { return QSize(700, 410); }
 
 void ContentRingsWidget::drawCenteredMessage(QPainter &painter, const QString &message) const
 {
-    painter.setPen(m_state == State::Error ? palette().color(QPalette::Link)
-                                           : palette().color(QPalette::PlaceholderText));
+    painter.setPen(palette().color(QPalette::PlaceholderText));
     painter.drawText(rect().adjusted(24, 24, -24, -24), Qt::AlignCenter | Qt::TextWordWrap, message);
 }
 
@@ -267,13 +276,25 @@ void ContentRingsWidget::paintEvent(QPaintEvent *event)
     }
 
     const QRectF area = rect().adjusted(14, 12, -14, -12);
-    const bool showLegend = area.width() >= 620.0;
-    const qreal legendWidth = showLegend ? qMin<qreal>(230.0, area.width() * 0.31) : 0.0;
+    const qreal spacing = dwarfsctl_kde::layoutSpacing(this);
+    const qreal rowHeight = fontMetrics().height();
+    const qreal dotSize = qMax<qreal>(10, rowHeight * 0.55);
+    qreal valueWidth = 0;
+    for (const auto &node : m_root.children)
+        valueWidth = qMax<qreal>(valueWidth, fontMetrics().horizontalAdvance(dataSize(node.bytes)));
+    const qreal desiredLegendWidth = qMax<qreal>(220, dotSize + 4 * spacing + valueWidth
+                                                   + fontMetrics().horizontalAdvance(i18n("Documents")));
+    const bool showLegend = area.width() >= qMax<qreal>(620, desiredLegendWidth + 260);
+    const qreal legendWidth = showLegend ? desiredLegendWidth : 0;
     const QRectF chartArea(area.left() + legendWidth, area.top(), area.width() - legendWidth, area.height());
     const qreal radius = qMax<qreal>(70.0, qMin(chartArea.height() * 0.47, chartArea.width() * 0.47));
     const QPointF center(chartArea.center().x(), chartArea.center().y() + 4.0);
-    const qreal hole = radius * 0.31;
-    const qreal middle = radius * 0.65;
+    const QFont totalFont = dwarfsctl_kde::headingFont(font());
+    const QFontMetrics totalMetrics(totalFont);
+    const qreal centerWidth = qMax(totalMetrics.horizontalAdvance(dataSize(m_root.bytes)),
+                                   fontMetrics().horizontalAdvance(i18n("contents")));
+    const qreal hole = qMin(radius * 0.56, qMax(radius * 0.31, centerWidth / 2 + spacing));
+    const qreal middle = qMax(radius * 0.65, hole + radius * 0.12);
     const qreal gap = qMax<qreal>(0.7, 110.0 / radius);
     const quint64 total = m_root.bytes;
     const qreal equalSpan = 360.0 / static_cast<qreal>(m_root.children.size());
@@ -283,7 +304,7 @@ void ContentRingsWidget::paintEvent(QPaintEvent *event)
         const Node &node = m_root.children.at(index);
         const qreal span = total > 0 ? 360.0 * static_cast<qreal>(node.bytes) / static_cast<qreal>(total) : equalSpan;
         const qreal visibleSpan = qMax<qreal>(0.15, span - gap);
-        QColor color = ringColor(index);
+        QColor color = ringColor(index, palette());
         QPainterPath inner = ringSegment(center, hole, middle - 1.5, start + gap * 0.5, visibleSpan);
         painter.setPen(QPen(palette().color(QPalette::Base), 1.2));
         painter.setBrush(color);
@@ -316,47 +337,53 @@ void ContentRingsWidget::paintEvent(QPaintEvent *event)
     }
 
     painter.setPen(palette().color(QPalette::Text));
-    QFont totalFont = font();
-    totalFont.setBold(true);
-    totalFont.setPointSize(totalFont.pointSize() + 2);
     painter.setFont(totalFont);
-    painter.drawText(QRectF(center.x() - hole, center.y() - 22, hole * 2, 24),
-                     Qt::AlignCenter, dataSize(m_root.bytes));
+    const qreal totalHeight = totalMetrics.height();
+    const qreal centerTop = center.y() - (totalHeight + rowHeight + spacing) / 2;
+    const qreal textWidth = qMax<qreal>(0, 2 * hole - 2 * spacing);
+    painter.drawText(QRectF(center.x() - textWidth / 2, centerTop, textWidth, totalHeight),
+                     Qt::AlignCenter,
+                     totalMetrics.elidedText(dataSize(m_root.bytes), Qt::ElideRight, static_cast<int>(textWidth)));
     painter.setFont(font());
     painter.setPen(palette().color(QPalette::PlaceholderText));
-    painter.drawText(QRectF(center.x() - hole, center.y() + 2, hole * 2, 20),
-                     Qt::AlignCenter, i18n("contents"));
+    painter.drawText(QRectF(center.x() - textWidth / 2, centerTop + totalHeight + spacing, textWidth, rowHeight),
+                     Qt::AlignCenter,
+                     fontMetrics().elidedText(i18n("contents"), Qt::ElideRight, static_cast<int>(textWidth)));
 
     if (showLegend) {
-        QFont titleFont = font();
-        titleFont.setBold(true);
-        titleFont.setPointSize(titleFont.pointSize() + 1);
-        painter.setFont(titleFont);
+        painter.setFont(totalFont);
         painter.setPen(palette().color(QPalette::Text));
-        painter.drawText(QRectF(area.left(), area.top() + 4, legendWidth - 14, 26),
+        painter.drawText(QRectF(area.left(), area.top(), legendWidth - 2 * spacing, totalHeight),
                          Qt::AlignLeft | Qt::AlignVCenter, i18n("Content Rings"));
         painter.setFont(font());
-        qreal y = area.top() + 44.0;
-        const int rows = qMin(7, m_root.children.size());
+        const QString hint = i18n("Point to a ring to see its path and logical size.");
+        const qreal hintWidth = legendWidth - 2 * spacing;
+        const int hintHeight = fontMetrics().boundingRect(QRect(0, 0, static_cast<int>(hintWidth), 1000),
+                                                         Qt::TextWordWrap, hint).height();
+        qreal y = area.top() + totalHeight + 2 * spacing;
+        const int availableRows = qMax(0, static_cast<int>((area.bottom() - hintHeight - spacing - y)
+                                                          / (rowHeight + spacing)));
+        const int rows = qMin(qMin(7, availableRows), static_cast<int>(m_root.children.size()));
         for (int index = 0; index < rows; ++index) {
             const Node &node = m_root.children.at(index);
             painter.setPen(Qt::NoPen);
-            painter.setBrush(ringColor(index));
-            painter.drawRoundedRect(QRectF(area.left(), y + 3, 12, 12), 3, 3);
+            painter.setBrush(ringColor(index, palette()));
+            painter.drawRoundedRect(QRectF(area.left(), y + (rowHeight - dotSize) / 2, dotSize, dotSize), 3, 3);
             painter.setPen(palette().color(QPalette::Text));
-            const QRectF nameRect(area.left() + 21, y, legendWidth - 106, 20);
+            const qreal nameLeft = area.left() + dotSize + spacing;
+            const qreal valueLeft = area.left() + legendWidth - valueWidth - spacing;
+            const QRectF nameRect(nameLeft, y, valueLeft - nameLeft - spacing, rowHeight);
             painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
                              fontMetrics().elidedText(node.name.isEmpty() ? i18n("Unnamed") : node.name,
                                                       Qt::ElideRight, static_cast<int>(nameRect.width())));
             painter.setPen(palette().color(QPalette::PlaceholderText));
-            painter.drawText(QRectF(area.left() + legendWidth - 90, y, 78, 20),
+            painter.drawText(QRectF(valueLeft, y, valueWidth, rowHeight),
                              Qt::AlignRight | Qt::AlignVCenter, dataSize(node.bytes));
-            y += 28.0;
+            y += rowHeight + spacing;
         }
         painter.setPen(palette().color(QPalette::PlaceholderText));
-        painter.drawText(QRectF(area.left(), area.bottom() - 48, legendWidth - 14, 42),
-                         Qt::AlignLeft | Qt::AlignBottom | Qt::TextWordWrap,
-                         i18n("Point to a ring to see its path and logical size."));
+        painter.drawText(QRectF(area.left(), area.bottom() - hintHeight, hintWidth, hintHeight),
+                         Qt::AlignLeft | Qt::AlignBottom | Qt::TextWordWrap, hint);
     }
 }
 

@@ -3,6 +3,7 @@
 
 #include "aboutdialog.h"
 #include "dwarfsctlrunner.h"
+#include "uipresentation.h"
 
 #include <KLocalizedString>
 #include <KPageWidgetItem>
@@ -177,8 +178,8 @@ AboutDialog::AboutDialog(QWidget *parent)
 
     auto *aboutContent = new QWidget(this);
     auto *root = new QVBoxLayout(aboutContent);
-    root->setContentsMargins(24, 20, 24, 20);
-    root->setSpacing(16);
+    root->setContentsMargins(dwarfsctl_kde::contentMargins(aboutContent));
+    root->setSpacing(2 * dwarfsctl_kde::layoutSpacing(aboutContent));
 
     auto *hero = new QGridLayout();
     hero->setContentsMargins(0, 0, 0, 0);
@@ -271,14 +272,11 @@ AboutDialog::AboutDialog(QWidget *parent)
 
     auto *creditsContent = new QWidget(this);
     auto *creditsLayout = new QVBoxLayout(creditsContent);
-    creditsLayout->setContentsMargins(24, 20, 24, 20);
-    creditsLayout->setSpacing(14);
+    creditsLayout->setContentsMargins(dwarfsctl_kde::contentMargins(creditsContent));
+    creditsLayout->setSpacing(2 * dwarfsctl_kde::layoutSpacing(creditsContent));
 
     auto *creditsTitle = new QLabel(i18n("People and projects"), creditsContent);
-    QFont creditsTitleFont = creditsTitle->font();
-    creditsTitleFont.setPointSizeF(creditsTitleFont.pointSizeF() * 1.35);
-    creditsTitleFont.setBold(true);
-    creditsTitle->setFont(creditsTitleFont);
+    creditsTitle->setFont(dwarfsctl_kde::headingFont(creditsTitle->font()));
     creditsLayout->addWidget(creditsTitle);
     creditsLayout->addWidget(wrappedLabel(
         i18n("DwarFSctl stands on the work of the following people and open-source communities."),
