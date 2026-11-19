@@ -9,7 +9,9 @@ namespace dwarfsctl_tray {
 
 // Keep Dolphin's visible sidebar entry aligned with the tray-owned mount
 // registry. This works for every mount path, including CLI and MIME launches.
-void syncPlacesEntry(bool add, const QString &imagePath, const QString &mountpoint);
+QString placesIconForImage(const QString &imagePath);
+void syncPlacesEntry(bool add, const QString &imagePath, const QString &mountpoint,
+                     const QString &icon = QStringLiteral("dwarfsctl-volume"));
 
 // Compatibility helper for cleanup call sites that only know the mountpoint.
 void removePlacesEntryForMountpoint(const QString &mountpoint);

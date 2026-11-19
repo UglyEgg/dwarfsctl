@@ -11,45 +11,29 @@
 
 namespace dwarfsctl_kde {
 
+// Explicit overrides select their program; default discovery prefers a sibling
+// backend so staged applications use their matching installation before PATH.
 inline QString dwarfsctlExe()
 {
-    static const QString exe = []() {
-        // When launched via D-Bus activation, PATH can be minimal. First, look for a sibling
-        // `dwarfsctl` in the same directory as the current executable (common install layout).
-        const QString appDir = QCoreApplication::applicationDirPath();
-        if (!appDir.isEmpty()) {
-            const QString inAppDir = QStandardPaths::findExecutable(QStringLiteral("dwarfsctl"), {appDir});
-            if (!inAppDir.isEmpty()) {
-                return inAppDir;
-            }
-        }
-
-        // Normal PATH-based lookup.
-        const QString found = QStandardPaths::findExecutable(QStringLiteral("dwarfsctl"));
-        if (!found.isEmpty()) {
-            return found;
-        }
-
-        // Best-effort fallbacks for common prefixes.
-        const QString home = QDir::homePath();
-        const QString candidates[] = {
-            home.isEmpty() ? QString() : QDir(home).filePath(QStringLiteral(".local/bin/dwarfsctl")),
-            QStringLiteral("/usr/local/bin/dwarfsctl"),
-            QStringLiteral("/usr/bin/dwarfsctl"),
-        };
-        for (const auto &c : candidates) {
-            if (c.isEmpty()) {
-                continue;
-            }
-            QFileInfo fi(c);
-            if (fi.exists() && fi.isFile() && fi.isExecutable()) {
-                return c;
-            }
-        }
-
-        return QStringLiteral("dwarfsctl");
-    }();
-    return exe;
+    const QString override = qEnvironmentVariable("DWARFSCTL_BIN").trimmed();
+    const QString program = override.isEmpty() ? QStringLiteral("dwarfsctl") : override;
+    if (QDir::isAbsolutePath(program)) return program;
+    if (override.isEmpty()) {
+        const QString sibling = QStandardPaths::findExecutable(program, {QCoreApplication::applicationDirPath()});
+        if (!sibling.isEmpty()) return sibling;
+    }
+    const QString found = QStandardPaths::findExecutable(program);
+    if (!found.isEmpty()) return found;
+    const QString candidates[] = {
+        QDir::home().filePath(QStringLiteral(".local/bin/") + program),
+        QStringLiteral("/usr/local/bin/") + program,
+        QStringLiteral("/usr/bin/") + program,
+    };
+    for (const auto &path : candidates) {
+        const QFileInfo info(path);
+        if (info.isFile() && info.isExecutable()) return path;
+    }
+    return program;
 }
 
 } // namespace dwarfsctl_kde

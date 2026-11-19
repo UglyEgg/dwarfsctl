@@ -124,7 +124,11 @@ assert 'QStringLiteral("config"), QStringLiteral("set")' in settings
 assert 'Remember Recent Images' not in tray
 assert 'Settings…' in tray
 assert 'creation.default_mode' in Path('cpp/cli/config.cpp').read_text()
-assert 'loadCreationDefaults' in Path('kde/kf6-plugin/src/builddialog.cpp').read_text()
+build_dialog = Path('kde/kf6-plugin/src/builddialog.cpp').read_text()
+assert re.search(r'BackendQuery::json\(&dialog,\s*\{QStringLiteral\("config"\),\s*'
+                 r'QStringLiteral\("show"\),\s*QStringLiteral\("--section"\),\s*'
+                 r'QStringLiteral\("creation"\)\}', build_dialog)
+assert 'parseCreationDefaults(reply.envelope.details, &defaults)' in build_dialog
 assert 'Tool payload pages' not in advanced
 for page in ['Overview', 'Storage', 'Runtime', 'Report']:
     assert f'i18n("{page}")' in advanced
@@ -174,7 +178,7 @@ for retired_control in ['ProfileEditorDialog', 'recommendAuto', 'recommendGoal',
                         'recommendUse', 'recommendSummary', 'View…', 'Edit…']:
     assert retired_control not in build_dialog, f'creation control returned: {retired_control}'
 assert 'compressionStatus' in build_dialog
-assert 'Change compression defaults and profiles from the DwarFS tray Settings.' in build_dialog
+assert 'Change this default in DwarFS tray Settings.' in build_dialog
 assert 'Optimized for %1' in build_dialog and 'confidence' not in build_dialog.split('compressionStatus->setText', 1)[-1]
 assert 'ProfileEditorDialog editor' in settings
 assert 'Create or Edit Profiles…' in settings

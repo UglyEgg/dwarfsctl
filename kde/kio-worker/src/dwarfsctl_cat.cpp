@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "dwarfsctl_cat.h"
+#include "dwarfsctl_exec.h"
 
 #include <QDir>
 #include <QFile>
@@ -9,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -18,21 +20,18 @@ namespace DwarfsKio {
 
 namespace {
 
-QString programPath()
-{
-    const QString override = qEnvironmentVariable("DWARFSCTL_BIN");
-    if (!override.isEmpty()) {
-        return override;
-    }
-    const QString found = QStandardPaths::findExecutable(QStringLiteral("dwarfsctl"));
-    return found.isEmpty() ? QStringLiteral("dwarfsctl") : found;
-}
+
 
 void backendError(QProcess &process, int exitCode, QString *kind, QString *message)
 {
     const QByteArray stdoutBytes = process.readAllStandardOutput().trimmed();
     const QJsonObject envelope = QJsonDocument::fromJson(stdoutBytes).object();
     const QJsonObject error = envelope.value(QStringLiteral("error")).toObject();
+    if (envelope.value(QStringLiteral("details")).toObject().value(QStringLiteral("reason")) == QLatin1String("destination_exists")) {
+        *kind = QStringLiteral("DestinationExists");
+        *message = error.value(QStringLiteral("message")).toString();
+        return;
+    }
     *kind = error.value(QStringLiteral("kind")).toString(QStringLiteral("BackendFailed"));
     *message = error.value(QStringLiteral("message"))
                    .toString(QStringLiteral("dwarfsctl failed (exit code %1)").arg(exitCode));
@@ -47,9 +46,8 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
     // A private temporary directory, created 0700 by QTemporaryDir. The backend
     // writes the extracted file here; the directory is what gets removed on
     // release.
-    auto *dir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/dwarfs-kio-XXXXXX"));
+    auto dir = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/dwarfs-kio-XXXXXX"));
     if (!dir->isValid()) {
-        delete dir;
         out.errorKind = QStringLiteral("TempDirFailed");
         out.error = QStringLiteral("could not create a temporary directory to read the file into");
         return out;
@@ -58,7 +56,7 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
     dir->setAutoRemove(true);
 
     const QString dest = dir->filePath(QStringLiteral("content"));
-    const QString program = programPath();
+    const QString program = dwarfsctl_kde::dwarfsctlExe();
 
     // argv-only, no shell.
     QProcess process;
@@ -70,7 +68,6 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
     if (!process.waitForStarted(10000)) {
         out.errorKind = QStringLiteral("DependencyMissing");
         out.error = QStringLiteral("could not start %1: %2").arg(program, process.errorString());
-        delete dir;
         return out;
     }
 
@@ -78,7 +75,6 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
     if (!process.waitForFinished(600000)) {
         process.kill();
         process.waitForFinished(5000);
-        delete dir;
         out.errorKind = QStringLiteral("Timeout");
         out.error = QStringLiteral("dwarfsctl cat did not finish in time");
         return out;
@@ -90,7 +86,6 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
     // which is more useful than anything this layer could invent.
     if (exitCode != 0) {
         backendError(process, exitCode, &out.errorKind, &out.error);
-        delete dir;
         return out;
     }
 
@@ -102,12 +97,12 @@ MaterialisedFile materialise(const QString &imagePath, const QString &innerPath)
         out.errorKind = QStringLiteral("EmptyOutput");
         out.error = QStringLiteral("dwarfsctl reported success but produced no file at the "
                                    "expected location");
-        delete dir;
         return out;
     }
 
     out.ok = true;
     out.localPath = dest;
+    out.directory = std::move(dir);
     out.size = static_cast<quint64>(info.size());
     // Keep the directory alive until release(); it is owned by the caller now.
     return out;
@@ -132,8 +127,17 @@ CopyOutResult copyOutToLocal(const QString &imagePath,
         return out;
     }
 
+    QTemporaryDir staging(QFileInfo(destination).dir().filePath(QStringLiteral(".dwarfsctl-copy-XXXXXX")));
+    if (!staging.isValid()) {
+        out.errorKind = QStringLiteral("TempDirFailed");
+        out.error = QStringLiteral("could not create a private copy staging directory");
+        return out;
+    }
     QProcess process;
-    process.setProgram(programPath());
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("DWARFSCTL_COPY_STAGING_DIR"), staging.path());
+    process.setProcessEnvironment(environment);
+    process.setProgram(dwarfsctl_kde::dwarfsctlExe());
     QStringList arguments{QStringLiteral("cat"), imagePath, innerPath, destination};
     if (overwrite) {
         arguments.append(QStringLiteral("--force"));
@@ -147,10 +151,29 @@ CopyOutResult copyOutToLocal(const QString &imagePath,
         return out;
     }
 
-    while (!process.waitForFinished(100)) {
+    while (process.state() != QProcess::NotRunning && !process.waitForFinished(100)) {
         if (cancelled && cancelled()) {
-            process.kill();
-            process.waitForFinished(5000);
+            process.terminate();
+            const bool stopped = process.state() == QProcess::NotRunning || process.waitForFinished(2500);
+            if (!stopped) {
+                process.kill();
+                process.waitForFinished(1000);
+                out.errorKind = QStringLiteral("CleanupUnconfirmed");
+                out.error = QStringLiteral("The copy was stopped, but its outcome is unconfirmed. Check the destination before retrying.");
+                return out;
+            }
+            const auto response = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+            if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && response.value(QStringLiteral("ok")).toBool()) {
+                const QFileInfo published(destination);
+                out.ok = published.isFile();
+                out.size = published.size();
+                return out;
+            }
+            if (!staging.remove()) {
+                out.errorKind = QStringLiteral("CleanupUnconfirmed");
+                out.error = QStringLiteral("Copy staging could not be removed. Check the destination before retrying.");
+                return out;
+            }
             out.errorKind = QStringLiteral("Cancelled");
             out.error = QStringLiteral("copy was cancelled");
             return out;
@@ -177,18 +200,7 @@ CopyOutResult copyOutToLocal(const QString &imagePath,
 
 void releaseMaterialised(const MaterialisedFile &file)
 {
-    if (file.localPath.isEmpty()) {
-        return;
-    }
-    // The file lives in a directory created for it. Removing that directory
-    // removes the content file with it.
-    //
-    // QDir is deliberately non-const: removeRecursively() is a non-const member,
-    // so a const QDir does not compile.
-    QDir parent = QFileInfo(file.localPath).dir();
-    if (parent.exists()) {
-        parent.removeRecursively();
-    }
+    if (file.directory) file.directory->remove();
 }
 
 bool readWholeFile(const QString &path, quint64 size, QByteArray *out, quint64 maxBytes)

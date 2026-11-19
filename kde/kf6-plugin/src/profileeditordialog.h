@@ -19,6 +19,10 @@ class QComboBox;
 class QLabel;
 class QStackedWidget;
 class QAction;
+class QGroupBox;
+class QDialogButtonBox;
+class QPushButton;
+class QJsonObject;
 
 namespace dwarfsplugin {
 
@@ -74,12 +78,17 @@ private:
     void showWarningBanner(const QString &title, const QString &body);
     void showInfoBanner(const QString &title, const QString &body);
     void buildUi();
+    bool populateSchema(const QJsonObject &schema);
+    void loadPrerequisites();
+    void loadFailed(const QString &error);
+    void updateAvailability();
+    void saveEdits(const QString &name, const QStringList &args);
+    void deleteEdits(const QString &name);
+    void mutationUnconfirmed(const QString &name, const QStringList &args, bool deleting, const QString &error);
+    void reconcileMutation();
     void loadProfileArgs(const QString &profileName);
     void setUiFromArgs(const QStringList &args);
     QStringList buildArgsFromUi() const;
-    bool validateWithDwarfsctl(const QStringList &args, QString *err) const;
-    bool saveProfile(const QString &name, const QStringList &args, QString *err);
-    bool deleteProfile(const QString &name, QString *err);
     void updatePreview();
     void applySimpleSelection();
     void syncSimpleFromOptions();
@@ -88,6 +97,22 @@ private:
     QString m_initialName;
     Result m_result;
 
+    bool m_busy = false;
+    bool m_ready = false;
+    bool m_reconcile = false;
+    bool m_pendingDelete = false;
+    QString m_pendingName;
+    QStringList m_pendingArgs;
+    QString m_schemaWarning;
+    QGroupBox *m_compressionGroup = nullptr;
+    QGroupBox *m_exactGroup = nullptr;
+    QWidget *m_split = nullptr;
+    QStackedWidget *m_stack = nullptr;
+    QDialogButtonBox *m_buttons = nullptr;
+    QPushButton *m_reset = nullptr;
+    QPushButton *m_delete = nullptr;
+    QPushButton *m_retry = nullptr;
+    QLabel *m_status = nullptr;
     QListWidget *m_nav = nullptr;
     QLineEdit *m_nameEdit = nullptr;
     QPlainTextEdit *m_preview = nullptr;

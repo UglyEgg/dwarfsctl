@@ -28,11 +28,12 @@
 #include <QSignalBlocker>
 #include <optional>
 #include <QVBoxLayout>
+#include <QTimer>
 
 #include <KLocalizedString>
 
 #include "dwarfsctljson.h"
-#include "dwarfsctlrunner.h"
+#include "backendquery.h"
 #include "logging.h"
 
 namespace dwarfsplugin {
@@ -46,7 +47,6 @@ struct CategoryDef {
     QList<MkdwarfsOptionDef> opts;
 };
 
-static bool runDwarfsctlJson(QWidget *parent, const QStringList &args, Envelope *outEnv, QString *outErr);
 
 /// Map a schema `kind` string to an editor kind.
 ///
@@ -88,43 +88,41 @@ static std::optional<MkdwarfsOptionDef::Kind> kindFromString(const QString &s)
     return std::nullopt;
 }
 
-static QList<CategoryDef> loadSchemaFromDwarfsctl(QWidget *parent, QString *outErr)
+static QList<CategoryDef> parseSchema(const QJsonObject &schemaObj, QString *outErr)
 {
-    Envelope env;
-    QString err;
-    if (!runDwarfsctlJson(parent, {QStringLiteral("mkdwarfs"), QStringLiteral("schema")}, &env, &err)) {
-        if (outErr) {
-            *outErr = err;
-        }
+    if (!schemaObj.value(QStringLiteral("categories")).isArray()) {
+        *outErr = i18n("The image creation schema has no valid categories.");
         return {};
     }
-
-    const auto schemaVal = env.details.value(QStringLiteral("schema"));
-    if (!schemaVal.isObject()) {
-        if (outErr) {
-            *outErr = i18n("dwarfsctl returned an invalid schema payload (missing 'schema' object)");
-        }
-        return {};
-    }
-
-    const QJsonObject schemaObj = schemaVal.toObject();
     const QJsonArray categories = schemaObj.value(QStringLiteral("categories")).toArray();
 
     QList<CategoryDef> cats;
     cats.reserve(categories.size());
     for (const auto &catVal : categories) {
         if (!catVal.isObject()) {
-            continue;
+            *outErr = i18n("The image creation schema contains an invalid category.");
+            return {};
         }
         const QJsonObject catObj = catVal.toObject();
+        if (!catObj.value(QStringLiteral("name")).isString() || catObj.value(QStringLiteral("name")).toString().isEmpty()
+            || !catObj.value(QStringLiteral("options")).isArray()) {
+            *outErr = i18n("The image creation schema contains an invalid category.");
+            return {};
+        }
         CategoryDef cat;
         cat.name = catObj.value(QStringLiteral("name")).toString();
         const QJsonArray options = catObj.value(QStringLiteral("options")).toArray();
         for (const auto &optVal : options) {
             if (!optVal.isObject()) {
-                continue;
+                *outErr = i18n("The image creation schema contains an invalid option.");
+                return {};
             }
             const QJsonObject o = optVal.toObject();
+            if (!o.value(QStringLiteral("opt")).isString() || o.value(QStringLiteral("opt")).toString().isEmpty()
+                || !o.value(QStringLiteral("label")).isString() || !o.value(QStringLiteral("kind")).isString()) {
+                *outErr = i18n("The image creation schema contains an invalid option.");
+                return {};
+            }
             MkdwarfsOptionDef def;
             def.opt = o.value(QStringLiteral("opt")).toString();
             def.label = o.value(QStringLiteral("label")).toString();
@@ -191,28 +189,17 @@ static QList<CategoryDef> loadSchemaFromDwarfsctl(QWidget *parent, QString *outE
     return cats;
 }
 
-static bool runDwarfsctlJson(QWidget *parent, const QStringList &args, Envelope *outEnv, QString *outErr)
+static bool profileArguments(const QJsonObject &details, QStringList *out)
 {
-    const auto rr = DwarfsctlRunner::run(args, DwarfsctlRunner::defaultTimeoutMs());
-    if (rr.crashed) {
-        if (outErr)
-            *outErr = i18n("dwarfsctl crashed");
-        return false;
+    const auto profile = details.value(QStringLiteral("profile"));
+    const auto args = profile.toObject().value(QStringLiteral("args"));
+    if (!profile.isObject() || !args.isArray()) return false;
+    QStringList result;
+    for (const auto &arg : args.toArray()) {
+        if (!arg.isString()) return false;
+        result.append(arg.toString());
     }
-    const auto pr = parseEnvelope(rr.stdout_bytes);
-    if (!pr.parsed) {
-        if (outErr)
-            *outErr = i18n("Failed to parse dwarfsctl JSON: %1", pr.error_message);
-        return false;
-    }
-    if (!pr.envelope.ok) {
-        if (outErr)
-            *outErr = pr.envelope.has_error ? pr.envelope.error.message : i18n("dwarfsctl failed");
-        return false;
-    }
-    if (outEnv)
-        *outEnv = pr.envelope;
-    Q_UNUSED(parent);
+    *out = result;
     return true;
 }
 
@@ -243,7 +230,8 @@ ProfileEditorDialog::ProfileEditorDialog(QWidget *parent, const QString &initial
     setMinimumSize(860, 560);
 
     buildUi();
-    loadProfileArgs(m_initialName.isEmpty() ? QStringLiteral("default") : m_initialName);
+    m_nameEdit->setText(m_initialName == QLatin1String("default") ? QString() : m_initialName);
+    QTimer::singleShot(0, this, [this] { loadPrerequisites(); });
 }
 
 void ProfileEditorDialog::showWarningBanner(const QString &title, const QString &body)
@@ -290,6 +278,21 @@ void ProfileEditorDialog::buildUi()
             m_banner->setVisible(false);
     });
     root->addWidget(m_banner);
+    auto *loadRow = new QHBoxLayout;
+    m_status = new QLabel(i18n("Loading compression settings…"), this);
+    m_status->setObjectName(QStringLiteral("profileLoadStatus"));
+    m_status->setWordWrap(true);
+    m_retry = new QPushButton(i18n("Retry"), this);
+    m_retry->setObjectName(QStringLiteral("profileRetry"));
+    m_retry->hide();
+    loadRow->addWidget(m_status, 1);
+    loadRow->addWidget(m_retry);
+    root->addLayout(loadRow);
+    connect(m_retry, &QPushButton::clicked, this, [this] {
+        if (m_busy) return;
+        if (m_reconcile) reconcileMutation();
+        else loadPrerequisites();
+    });
 
     auto *intro = new QLabel(
         i18n("Choose a practical starting point, then adjust exact DwarFS settings only when you need them."),
@@ -309,59 +312,124 @@ void ProfileEditorDialog::buildUi()
 
     // The practical starting point is identified by presentation metadata in
     // dwarfsctl's schema; the KDE UI does not duplicate the option inventory.
-    auto *compressionGroup = new QGroupBox(i18n("Starting point"), this);
-    auto *compressionLayout = new QVBoxLayout(compressionGroup);
-    auto *levelLabel = new QLabel(i18n("Priority"), compressionGroup);
+    m_compressionGroup = new QGroupBox(i18n("Starting point"), this);
+    auto *compressionLayout = new QVBoxLayout(m_compressionGroup);
+    auto *levelLabel = new QLabel(i18n("Priority"), m_compressionGroup);
     compressionLayout->addWidget(levelLabel);
-    m_simpleLevel = new QComboBox(compressionGroup);
+    m_simpleLevel = new QComboBox(m_compressionGroup);
     m_simpleLevel->setObjectName(QStringLiteral("simpleCompressionLevel"));
     m_simpleLevel->setAccessibleName(i18n("Compression priority"));
     compressionLayout->addWidget(m_simpleLevel);
     auto *levelHelp = new QLabel(
         i18n("Balanced works well for most folders. Choose faster creation when time matters, or a smaller image when storage matters."),
-        compressionGroup);
+        m_compressionGroup);
     levelHelp->setWordWrap(true);
     compressionLayout->addWidget(levelHelp);
-    m_simpleSummary = new QLabel(compressionGroup);
+    m_simpleSummary = new QLabel(m_compressionGroup);
     m_simpleSummary->setObjectName(QStringLiteral("exactSettingsSummary"));
     m_simpleSummary->setWordWrap(true);
     compressionLayout->addWidget(m_simpleSummary);
-    root->addWidget(compressionGroup);
+    root->addWidget(m_compressionGroup);
+    m_compressionGroup->setEnabled(false);
 
-    auto *exactGroup = new QGroupBox(i18n("Exact DwarFS settings"), this);
-    exactGroup->setObjectName(QStringLiteral("exactProfileSettings"));
-    auto *advancedLayout = new QVBoxLayout(exactGroup);
+    m_exactGroup = new QGroupBox(i18n("Exact DwarFS settings"), this);
+    m_exactGroup->setObjectName(QStringLiteral("exactProfileSettings"));
+    auto *advancedLayout = new QVBoxLayout(m_exactGroup);
     auto *expertHint = new QLabel(
         i18n("These controls map directly to the bundled DwarFS writer. Only enabled settings are stored."),
-        exactGroup);
+        m_exactGroup);
     expertHint->setWordWrap(true);
     advancedLayout->addWidget(expertHint);
 
-    auto *split = new QWidget(exactGroup);
-    auto *splitLayout = new QHBoxLayout(split);
+    m_split = new QWidget(m_exactGroup);
+    auto *splitLayout = new QHBoxLayout(m_split);
     splitLayout->setContentsMargins(0, 0, 0, 0);
-    m_nav = new QListWidget(split);
+    m_nav = new QListWidget(m_split);
     m_nav->setObjectName(QStringLiteral("advancedOptionsNavigation"));
     m_nav->setMinimumWidth(220);
     splitLayout->addWidget(m_nav);
-    auto *stack = new QStackedWidget(split);
-    stack->setObjectName(QStringLiteral("advancedOptionsStack"));
-    splitLayout->addWidget(stack, 1);
-    advancedLayout->addWidget(split, 1);
+    m_stack = new QStackedWidget(m_split);
+    m_stack->setObjectName(QStringLiteral("advancedOptionsStack"));
+    QObject::connect(m_nav, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+    splitLayout->addWidget(m_stack, 1);
+    advancedLayout->addWidget(m_split, 1);
 
+    auto *prevLabel = new QLabel(i18n("Profile arguments"), m_exactGroup);
+    advancedLayout->addWidget(prevLabel);
+    m_preview = new QPlainTextEdit(m_exactGroup);
+    m_preview->setObjectName(QStringLiteral("profileArgumentsPreview"));
+    m_preview->setReadOnly(true);
+    m_preview->setMaximumBlockCount(4096);
+    m_preview->setMaximumHeight(120);
+    m_preview->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    m_preview->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    advancedLayout->addWidget(m_preview);
+    root->addWidget(m_exactGroup, 1);
+    m_exactGroup->setEnabled(false);
+
+    m_simpleLevel->addItem(i18n("Loading compression settings…"));
+    QObject::connect(m_simpleLevel, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() {
+        applySimpleSelection();
+    });
+    m_buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, this);
+    m_buttons->button(QDialogButtonBox::Ok)->setText(i18n("Save"));
+    m_reset = m_buttons->addButton(i18n("Reset"), QDialogButtonBox::ResetRole);
+    m_delete = m_buttons->addButton(i18n("Delete"), QDialogButtonBox::DestructiveRole);
+    root->addWidget(m_buttons);
+
+    QObject::connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    QObject::connect(m_buttons, &QDialogButtonBox::accepted, this, [this]() {
+        const QString name = m_nameEdit->text().trimmed();
+        if (name.isEmpty()) {
+            showWarningBanner(i18n("Save profile"), i18n("Profile name is required."));
+            return;
+        }
+        if (name == QStringLiteral("default")) {
+            showWarningBanner(i18n("Save profile"), i18n("'default' is reserved and cannot be modified."));
+            return;
+        }
+        if (!m_ready || m_busy || m_reconcile) return;
+        saveEdits(name, buildArgsFromUi());
+    });
+    QObject::connect(m_reset, &QPushButton::clicked, this, [this]() { if (m_ready && !m_busy && !m_reconcile) setUiFromArgs({}); });
+    QObject::connect(m_delete, &QPushButton::clicked, this, [this]() {
+        if (!m_ready || m_busy || m_reconcile) return;
+        const QString name = m_nameEdit->text().trimmed();
+        if (name.isEmpty() || name == QStringLiteral("default")) {
+            showWarningBanner(i18n("Delete profile"), i18n("Select a non-default profile to delete."));
+            return;
+        }
+        if (QMessageBox::question(this, i18n("Delete profile"), i18n("Delete profile '%1'?", name)) != QMessageBox::Yes)
+            return;
+        if (!m_ready || m_busy || m_reconcile) return;
+        deleteEdits(name);
+    });
+    QObject::connect(m_nameEdit, &QLineEdit::textChanged, this, [this]() { updatePreview(); });
+
+    updateAvailability();
+}
+
+bool ProfileEditorDialog::populateSchema(const QJsonObject &schema)
+{
     QString schemaErr;
-    const auto cats = loadSchemaFromDwarfsctl(this, &schemaErr);
+    const auto cats = parseSchema(schema, &schemaErr);
     if (cats.isEmpty()) {
-        QMessageBox::critical(this,
-                              i18n("Profile editor unavailable"),
-                              schemaErr.isEmpty() ? i18n("Unable to load mkdwarfs option schema from dwarfsctl.") : schemaErr);
-        reject();
-        return;
+        loadFailed(schemaErr.isEmpty() ? i18n("The image creation schema has no usable options.") : schemaErr);
+        return false;
     }
-
+    m_options.clear();
+    m_repeatableValues.clear();
+    m_simpleOptionIndex = -1;
+    m_nav->clear();
+    while (m_stack->count()) {
+        auto *page = m_stack->widget(0);
+        m_stack->removeWidget(page);
+        delete page;
+    }
+    m_simpleLevel->clear();
     for (const auto &cat : cats) {
         m_nav->addItem(cat.name);
-        auto *page = new QWidget(stack);
+        auto *page = new QWidget(m_stack);
         auto *pageLayout = new QVBoxLayout(page);
         auto *form = new QVBoxLayout();
         form->setContentsMargins(0, 0, 0, 0);
@@ -460,28 +528,16 @@ void ProfileEditorDialog::buildUi()
 
         pageLayout->addLayout(form);
         pageLayout->addStretch(1);
-        auto *scroll = new QScrollArea(split);
+        auto *scroll = new QScrollArea(m_split);
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidgetResizable(true);
         scroll->setWidget(page);
-        stack->addWidget(scroll);
+        m_stack->addWidget(scroll);
     }
 
-    QObject::connect(m_nav, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
     m_nav->setCurrentRow(0);
 
-    auto *prevLabel = new QLabel(i18n("Profile arguments"), exactGroup);
-    advancedLayout->addWidget(prevLabel);
-    m_preview = new QPlainTextEdit(exactGroup);
-    m_preview->setObjectName(QStringLiteral("profileArgumentsPreview"));
-    m_preview->setReadOnly(true);
-    m_preview->setMaximumBlockCount(4096);
-    m_preview->setMaximumHeight(120);
-    m_preview->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-    m_preview->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    advancedLayout->addWidget(m_preview);
-    root->addWidget(exactGroup, 1);
-
+    m_simpleLevel->setEnabled(m_simpleOptionIndex >= 0);
     if (m_simpleOptionIndex >= 0) {
         const auto &def = m_options[m_simpleOptionIndex].def;
         m_simpleLevel->addItem(i18n("Balanced (recommended)"), QVariant());
@@ -495,100 +551,79 @@ void ProfileEditorDialog::buildUi()
             schemaErr = i18n("The installed DwarFS schema does not identify a practical starting point. Exact settings remain available below.");
     }
 
-    QObject::connect(m_simpleLevel, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() {
-        applySimpleSelection();
-    });
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(i18n("Save"));
-    auto *resetBtn = buttons->addButton(i18n("Reset"), QDialogButtonBox::ResetRole);
-    auto *deleteBtn = buttons->addButton(i18n("Delete"), QDialogButtonBox::DestructiveRole);
-    root->addWidget(buttons);
+    m_schemaWarning = schemaErr;
+    return true;
+}
 
-    QObject::connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, this, [this]() {
-        const QString name = m_nameEdit->text().trimmed();
-        if (name.isEmpty()) {
-            showWarningBanner(i18n("Save profile"), i18n("Profile name is required."));
-            return;
-        }
-        if (name == QStringLiteral("default")) {
-            showWarningBanner(i18n("Save profile"), i18n("'default' is reserved and cannot be modified."));
-            return;
-        }
-        const auto args = buildArgsFromUi();
-        QString err;
-        if (!validateWithDwarfsctl(args, &err)) {
-            QMessageBox::critical(this, i18n("Invalid profile"), err);
-            return;
-        }
-        if (!saveProfile(name, args, &err)) {
-            QMessageBox::critical(this, i18n("Save profile"), err);
-            return;
-        }
-        m_result.saved = true;
-        m_result.profileName = name;
-        m_result.profileArgs = args;
-        accept();
-    });
-    QObject::connect(resetBtn, &QPushButton::clicked, this, [this]() { setUiFromArgs({}); });
-    QObject::connect(deleteBtn, &QPushButton::clicked, this, [this]() {
-        const QString name = m_nameEdit->text().trimmed();
-        if (name.isEmpty() || name == QStringLiteral("default")) {
-            showWarningBanner(i18n("Delete profile"), i18n("Select a non-default profile to delete."));
-            return;
-        }
-        if (QMessageBox::question(this, i18n("Delete profile"), i18n("Delete profile '%1'?", name)) != QMessageBox::Yes)
-            return;
-        QString err;
-        if (!deleteProfile(name, &err)) {
-            QMessageBox::critical(this, i18n("Delete profile"), err);
-            return;
-        }
-        m_nameEdit->setText(QString());
-        setUiFromArgs({});
-        showInfoBanner(i18n("Delete profile"), i18n("Profile deleted."));
-    });
-    QObject::connect(m_nameEdit, &QLineEdit::textChanged, this, [this]() { updatePreview(); });
+void ProfileEditorDialog::updateAvailability()
+{
+    const bool available = m_ready && !m_busy && !m_reconcile;
+    m_buttons->button(QDialogButtonBox::Ok)->setEnabled(available);
+    m_reset->setEnabled(available);
+    m_delete->setEnabled(available);
+    m_compressionGroup->setEnabled(available);
+    m_exactGroup->setEnabled(available);
+    m_nameEdit->setEnabled(!m_busy || !m_ready);
+    m_retry->setEnabled(!m_busy);
+}
 
-    if (!schemaErr.isEmpty()) {
-        showWarningBanner(i18n("Some settings are unavailable"), schemaErr);
-    }
+void ProfileEditorDialog::loadFailed(const QString &error)
+{
+    m_busy = false;
+    m_ready = false;
+    m_status->setText(i18n("Compression settings unavailable"));
+    showWarningBanner(i18n("Profile unavailable"), error);
+    m_retry->show();
+    updateAvailability();
+}
+
+void ProfileEditorDialog::loadPrerequisites()
+{
+    if (m_busy) return;
+    m_busy = true;
+    m_ready = false;
+    m_retry->hide();
+    m_banner->hide();
+    m_status->setText(i18n("Loading compression settings…"));
+    updateAvailability();
+    BackendQuery::ui(this, [this](bool valid, const dwarfsctl_kde::UiConfig &, const QString &error) {
+        if (!valid) { loadFailed(error); return; }
+        BackendQuery::json(this, {QStringLiteral("mkdwarfs"), QStringLiteral("schema")}, [this](const BackendReply &reply) {
+            const auto schema = reply.envelope.details.value(QStringLiteral("schema"));
+            if (!reply.ok || !schema.isObject()) {
+                loadFailed(reply.ok ? i18n("The image creation schema response is invalid.") : reply.error);
+                return;
+            }
+            if (populateSchema(schema.toObject())) loadProfileArgs(m_initialName);
+        });
+    });
 }
 
 void ProfileEditorDialog::loadProfileArgs(const QString &profileName)
 {
-    if (profileName.isEmpty() || profileName == QStringLiteral("default")) {
-        m_nameEdit->setText(profileName == QStringLiteral("default") ? QString() : profileName);
+    if (profileName.isEmpty() || profileName == QLatin1String("default")) {
         setUiFromArgs({});
-        updatePreview();
+        m_busy = false;
+        m_ready = true;
+        m_status->setText(i18n("Ready"));
+        if (!m_schemaWarning.isEmpty()) showWarningBanner(i18n("Some settings are unavailable"), m_schemaWarning);
+        updateAvailability();
         return;
     }
-
-    // Load args from dwarfsctl
-    Envelope env;
-    QString err;
-    if (!runDwarfsctlJson(this,
-                          {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("get"), profileName},
-                          &env,
-                          &err)) {
-        QMessageBox::critical(this, i18n("Load profile"), err);
-        m_nameEdit->setText(profileName);
-        setUiFromArgs({});
-        updatePreview();
-        return;
-    }
-    const auto prof = env.details.value(QStringLiteral("profile")).toObject();
-    const auto argsArr = prof.value(QStringLiteral("args")).toArray();
-    QStringList args;
-    for (const auto &v : argsArr) {
-        const auto s = v.toString();
-        if (!s.isEmpty())
-            args << s;
-    }
-
-    m_nameEdit->setText(profileName);
-    setUiFromArgs(args);
-    updatePreview();
+    BackendQuery::json(this, {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"),
+                             QStringLiteral("get"), profileName}, [this](const BackendReply &reply) {
+        QStringList args;
+        if (!reply.ok || !profileArguments(reply.envelope.details, &args)) {
+            loadFailed(reply.ok ? i18n("The profile response is invalid.") : reply.error);
+            return;
+        }
+        setUiFromArgs(args);
+        m_busy = false;
+        m_ready = true;
+        m_status->setText(i18n("Ready"));
+        if (!m_schemaWarning.isEmpty()) showWarningBanner(i18n("Some settings are unavailable"), m_schemaWarning);
+        updateAvailability();
+    });
 }
 
 void ProfileEditorDialog::setUiFromArgs(const QStringList &args)
@@ -741,8 +776,7 @@ void ProfileEditorDialog::setUiFromArgs(const QStringList &args)
         if (le)
             le->setText(it.value().join(QLatin1Char(' ')));
     }
-    syncSimpleFromOptions();
-    updateSimpleSummary();
+    updatePreview();
 }
 
 QStringList ProfileEditorDialog::buildArgsFromUi() const
@@ -841,64 +875,134 @@ QStringList ProfileEditorDialog::buildArgsFromUi() const
     return args;
 }
 
-bool ProfileEditorDialog::validateWithDwarfsctl(const QStringList &args, QString *err) const
+void ProfileEditorDialog::mutationUnconfirmed(const QString &name, const QStringList &args, bool deleting, const QString &error)
 {
-    QStringList cmd;
-    cmd << QStringLiteral("config") << QStringLiteral("mkdwarfs-profiles") << QStringLiteral("validate");
-    for (const auto &a : args) {
-        cmd << QStringLiteral("--arg") << a;
-    }
-
-    Envelope env;
-    QString e;
-    if (!runDwarfsctlJson(const_cast<ProfileEditorDialog *>(this), cmd, &env, &e)) {
-        if (err)
-            *err = e;
-        return false;
-    }
-    if (err)
-        *err = QString();
-    Q_UNUSED(env);
-    return true;
+    m_pendingName = name;
+    m_pendingArgs = args;
+    m_pendingDelete = deleting;
+    m_reconcile = true;
+    m_busy = false;
+    m_status->setText(i18n("Change not confirmed"));
+    showWarningBanner(i18n("Reload before making another change"),
+        i18n("The backend did not confirm the change. Reload the saved profile to check its current state. Your draft is preserved. %1", error));
+    m_retry->setText(i18n("Reload"));
+    m_retry->show();
+    updateAvailability();
 }
 
-bool ProfileEditorDialog::saveProfile(const QString &name, const QStringList &args, QString *err)
+void ProfileEditorDialog::saveEdits(const QString &name, const QStringList &args)
 {
-    QStringList cmd;
-    cmd << QStringLiteral("config") << QStringLiteral("mkdwarfs-profiles") << QStringLiteral("set") << name;
-    for (const auto &a : args) {
-        cmd << QStringLiteral("--arg") << a;
-    }
-
-    Envelope env;
-    QString e;
-    if (!runDwarfsctlJson(this, cmd, &env, &e)) {
-        if (err)
-            *err = e;
-        return false;
-    }
-    if (err)
-        *err = QString();
-    Q_UNUSED(env);
-    return true;
+    m_busy = true;
+    m_status->setText(i18n("Validating profile…"));
+    m_banner->hide();
+    updateAvailability();
+    QStringList command{QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("validate")};
+    for (const auto &arg : args) command << QStringLiteral("--arg") << arg;
+    BackendQuery::json(this, command, [this, name, args](const BackendReply &validation) {
+        if (!validation.ok || validation.envelope.details.value(QStringLiteral("valid")) != QJsonValue(true)) {
+            m_busy = false;
+            m_status->setText(i18n("Profile not saved"));
+            showWarningBanner(i18n("Invalid profile"), validation.ok ? i18n("The validation response is invalid.") : validation.error);
+            updateAvailability();
+            return;
+        }
+        m_status->setText(i18n("Saving profile…"));
+        QStringList command{QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("set"), name};
+        for (const auto &arg : args) command << QStringLiteral("--arg") << arg;
+        BackendQuery::json(this, command, [this, name, args](const BackendReply &reply) {
+            QStringList saved;
+            if (!reply.ok || reply.envelope.details.value(QStringLiteral("profile")).toObject().value(QStringLiteral("name")) != QJsonValue(name)
+                || !profileArguments(reply.envelope.details, &saved) || saved != args) {
+                mutationUnconfirmed(name, args, false, reply.ok ? i18n("The saved profile response is invalid.") : reply.error);
+                return;
+            }
+            m_result = {true, name, args};
+            m_busy = false;
+            accept();
+        });
+    });
 }
 
-bool ProfileEditorDialog::deleteProfile(const QString &name, QString *err)
+void ProfileEditorDialog::deleteEdits(const QString &name)
 {
-    QStringList cmd;
-    cmd << QStringLiteral("config") << QStringLiteral("mkdwarfs-profiles") << QStringLiteral("delete") << name;
+    const auto draft = buildArgsFromUi();
+    m_busy = true;
+    m_status->setText(i18n("Deleting profile…"));
+    m_banner->hide();
+    updateAvailability();
+    BackendQuery::json(this, {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("delete"), name},
+                       [this, name, draft](const BackendReply &reply) {
+        if (!reply.ok || reply.envelope.details.value(QStringLiteral("deleted")) != QJsonValue(name)) {
+            mutationUnconfirmed(name, draft, true, reply.ok ? i18n("The delete response is invalid.") : reply.error);
+            return;
+        }
+        m_busy = false;
+        m_nameEdit->clear();
+        setUiFromArgs({});
+        m_status->setText(i18n("Profile deleted"));
+        showInfoBanner(i18n("Delete profile"), i18n("Profile deleted."));
+        updateAvailability();
+    });
+}
 
-    Envelope env;
-    QString e;
-    if (!runDwarfsctlJson(this, cmd, &env, &e)) {
-        if (err)
-            *err = e;
-        return false;
-    }
-    if (err)
-        *err = QString();
-    Q_UNUSED(env);
-    return true;
+void ProfileEditorDialog::reconcileMutation()
+{
+    if (m_busy) return;
+    m_busy = true;
+    m_status->setText(i18n("Checking saved profiles…"));
+    updateAvailability();
+    BackendQuery::json(this, {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("list")},
+                       [this](const BackendReply &listing) {
+        const auto profiles = listing.envelope.details.value(QStringLiteral("profiles"));
+        if (!listing.ok || !profiles.isArray()) {
+            mutationUnconfirmed(m_pendingName, m_pendingArgs, m_pendingDelete,
+                                listing.ok ? i18n("The profile list response is invalid.") : listing.error);
+            return;
+        }
+        bool present = false;
+        for (const auto &name : profiles.toArray()) {
+            if (!name.isString()) {
+                mutationUnconfirmed(m_pendingName, m_pendingArgs, m_pendingDelete, i18n("The profile list response is invalid."));
+                return;
+            }
+            present |= name.toString() == m_pendingName;
+        }
+        if (!present) {
+            m_busy = false;
+            m_reconcile = false;
+            m_retry->hide();
+            if (m_pendingDelete) {
+                m_nameEdit->clear();
+                setUiFromArgs({});
+                showInfoBanner(i18n("Delete confirmed"), i18n("The profile is no longer saved."));
+            } else {
+                showWarningBanner(i18n("Profile not saved"), i18n("The saved profile does not exist. Your draft is preserved; review it before saving again."));
+            }
+            m_status->setText(i18n("Ready"));
+            updateAvailability();
+            return;
+        }
+        BackendQuery::json(this, {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("get"), m_pendingName},
+                           [this](const BackendReply &reply) {
+            QStringList saved;
+            if (!reply.ok || !profileArguments(reply.envelope.details, &saved)) {
+                mutationUnconfirmed(m_pendingName, m_pendingArgs, m_pendingDelete,
+                                    reply.ok ? i18n("The saved profile response is invalid.") : reply.error);
+                return;
+            }
+            m_busy = false;
+            m_reconcile = false;
+            m_retry->hide();
+            m_status->setText(i18n("Ready"));
+            if (!m_pendingDelete && saved == m_pendingArgs) {
+                m_result = {true, m_pendingName, saved};
+                showInfoBanner(i18n("Save confirmed"), i18n("The saved profile matches your requested settings."));
+            } else {
+                showWarningBanner(i18n("Saved profile checked"), i18n("The saved profile differs from the requested change. Your draft is preserved; review it before trying again."));
+            }
+            updateAvailability();
+        });
+    });
 }
 
 void ProfileEditorDialog::applySimpleSelection()

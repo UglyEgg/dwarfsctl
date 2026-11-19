@@ -10,6 +10,8 @@ include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common)
+
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets DBus Svg)
 
 # Arch (and many distros) do not ship a top-level KF6Config.cmake.
@@ -18,6 +20,7 @@ find_package(KF6StatusNotifierItem REQUIRED)
 find_package(KF6CoreAddons REQUIRED)
 find_package(KF6I18n REQUIRED)
 find_package(KF6KIO REQUIRED)
+find_package(KF6JobWidgets REQUIRED)
 find_package(KF6IconThemes 6.3 REQUIRED)
 find_package(KF6WidgetsAddons REQUIRED)
 
@@ -32,10 +35,13 @@ qt_add_resources(TRAY_RESOURCES tray.qrc)
 
 qt_add_executable(dwarfsctl-tray
   src/main.cpp
+  src/directmountoperation.cpp
+  src/directmountoperation.h
+  ../common/operationstatus.cpp
   src/aboutdialog.cpp
   src/aboutdialog.h
-  src/dwarfsctlrunner.cpp
-  src/dwarfsctlrunner.h
+  ../common/dwarfsctlrunner.cpp
+  ../common/dwarfsctlrunner.h
   src/mount_executor.cpp
   src/mount_executor.h
   src/mount_liveness.cpp
@@ -137,7 +143,7 @@ if(BUILD_TESTING)
         tests/tst_about_dialog.cpp
         src/aboutdialog.cpp
         src/aboutdialog.h
-        src/dwarfsctlrunner.cpp
+        ../common/dwarfsctlrunner.cpp
         ${TRAY_RESOURCES}
     )
     target_include_directories(tst_about_dialog PRIVATE
@@ -173,7 +179,7 @@ if(BUILD_TESTING)
 
     add_executable(tst_profile_editor
         tests/tst_profile_editor.cpp
-        src/dwarfsctlrunner.cpp
+        ../common/dwarfsctlrunner.cpp
         ../kf6-plugin/src/bannerwidget.cpp
         ../kf6-plugin/src/dwarfsctljson.cpp
         ../kf6-plugin/src/profileeditordialog.cpp
@@ -192,7 +198,7 @@ if(BUILD_TESTING)
     add_executable(tst_settings_dialog
         tests/tst_settings_dialog.cpp
         src/settingsdialog.cpp
-        src/dwarfsctlrunner.cpp
+        ../common/dwarfsctlrunner.cpp
         ../kf6-plugin/src/bannerwidget.cpp
         ../kf6-plugin/src/dwarfsctljson.cpp
         ../kf6-plugin/src/profileeditordialog.cpp
@@ -220,4 +226,49 @@ if(BUILD_TESTING)
     add_test(NAME tst_dbus_runtime
         COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:tst_dbus_runtime> $<TARGET_FILE:dwarfsctl-tray>)
     set_tests_properties(tst_dbus_runtime PROPERTIES TIMEOUT 45)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_direct_mount tests/tst_direct_mount.cpp
+        src/directmountoperation.cpp src/directmountoperation.h ../common/operationstatus.cpp)
+    target_include_directories(tst_direct_mount PRIVATE src ../common)
+    target_link_libraries(tst_direct_mount PRIVATE Qt6::Core Qt6::Widgets Qt6::Test KF6::I18n)
+    add_test(NAME tst_direct_mount COMMAND tst_direct_mount)
+    set_tests_properties(tst_direct_mount PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_imagehistory tests/tst_imagehistory.cpp)
+    target_include_directories(tst_imagehistory PRIVATE ../common)
+    target_link_libraries(tst_imagehistory PRIVATE Qt6::Core Qt6::Test)
+    add_test(NAME tst_imagehistory COMMAND tst_imagehistory)
+    set_tests_properties(tst_imagehistory PROPERTIES TIMEOUT 30)
+    add_executable(tst_image_menu tests/tst_image_menu.cpp)
+    target_include_directories(tst_image_menu PRIVATE src ../common)
+    target_link_libraries(tst_image_menu PRIVATE Qt6::Core Qt6::Test KF6::I18n)
+    add_test(NAME tst_image_menu COMMAND tst_image_menu)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_mount_executor tests/tst_mount_executor.cpp
+        src/mount_executor.cpp src/mount_liveness.cpp)
+    target_include_directories(tst_mount_executor PRIVATE src ../common)
+    target_link_libraries(tst_mount_executor PRIVATE Qt6::Core Qt6::Test)
+    add_test(NAME tst_mount_executor COMMAND tst_mount_executor)
+    set_tests_properties(tst_mount_executor PROPERTIES TIMEOUT 30)
+endif()
+
+# GUI queries share the same bounded process ownership as image operations.
+foreach(gui_target dwarfsctl-tray tst_about_dialog tst_profile_editor tst_settings_dialog)
+    if(TARGET ${gui_target})
+        target_sources(${gui_target} PRIVATE
+            ../kf6-plugin/src/dwarfsctljob.cpp
+            ../kf6-plugin/src/dwarfsctljob.h
+            ../kf6-plugin/src/logging.cpp)
+        target_include_directories(${gui_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../kf6-plugin/src)
+        target_link_libraries(${gui_target} PRIVATE Qt6::DBus KF6::CoreAddons KF6::JobWidgets KF6::KIOWidgets)
+    endif()
+endforeach()
+if(TARGET tst_about_dialog)
+    target_sources(tst_about_dialog PRIVATE ../kf6-plugin/src/dwarfsctljson.cpp)
 endif()

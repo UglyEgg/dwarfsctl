@@ -4,6 +4,9 @@
 #pragma once
 
 #include <QString>
+#include <QByteArray>
+
+struct stat;
 
 namespace dwarfsctl_tray {
 
@@ -37,7 +40,24 @@ enum class MountLiveness {
 /// This is a *table* match only. A mount can be listed and still be unusable
 /// (see `MountLiveness`), so callers deciding whether a path works must use
 /// `mountsUsable()` or `probeMountLiveness()` instead.
+enum class MountPresence { Present, Absent, Unknown };
+struct MountObservation {
+    MountPresence presence = MountPresence::Unknown;
+    QString source;
+};
+// Only a complete, checked kernel table can establish absence or ownership.
+MountObservation observeMount(const QString &mountpoint);
 bool isMounted(const QString& mountpoint);
+
+// Resolve existing aliases within the same bounded child budget as health probes.
+// Empty means unavailable, timed out, or admission exhausted.
+QString boundedCanonicalFilePath(const QString &path, int *error = nullptr);
+// Optional metadata is regular-file-only and never reads beyond one pipe record.
+QByteArray boundedRegularFileRead(const QString &path, int maximumBytes = 4096);
+// Metadata uses the same bounded admission and exact child ownership.
+bool boundedFileStat(const QString &path, struct stat *result, int *error = nullptr);
+// Verify the kernel's recorded source, not just the directory's existence.
+bool mountImageMatches(const QString& mountpoint, const QString& image);
 
 /// Classify a raw `statfs(2)` outcome. Pure, so the meaning of each errno is
 /// testable without a FUSE mount: only ENOTCONN is evidence of a dead daemon.
@@ -59,7 +79,10 @@ QString mountLivenessName(MountLiveness liveness);
 /// `statfs()` is the cheapest call that always round-trips to a FUSE daemon.
 /// `stat()` answers from the attribute cache even after the daemon dies, so it
 /// cannot decide this. Because a wedged daemon makes the call block forever,
-/// it runs in a forked child that the parent bounds and kills.
+/// it runs in a forked child that the parent bounds and kills. Concurrent calls
+/// share bounded admission; deferred reaping tracks every remaining owned
+/// PID under a mutex. Requests sharing a kernel mount reuse an unresolved
+/// child, and at most four children may be outstanding across all helpers.
 MountLiveness probeMountLiveness(const QString& mountpoint);
 
 /// True only when the mountpoint is both listed in the mount table and usable.

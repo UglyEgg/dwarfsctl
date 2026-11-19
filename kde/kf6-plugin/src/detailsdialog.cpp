@@ -14,6 +14,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -42,13 +43,15 @@ static QString jsonPretty(const QJsonValue &v)
         return QString();
     }
     if (v.isObject()) {
+        if (v.toObject().isEmpty()) return {};
         return QString::fromUtf8(QJsonDocument(v.toObject()).toJson(QJsonDocument::Indented));
     }
     if (v.isArray()) {
+        if (v.toArray().isEmpty()) return {};
         return QString::fromUtf8(QJsonDocument(v.toArray()).toJson(QJsonDocument::Indented));
     }
     if (v.isString()) {
-        return v.toString();
+        return v.toString().trimmed().isEmpty() ? QString() : v.toString();
     }
     // For numbers/bools, render as compact JSON.
     QJsonArray a;
@@ -79,12 +82,43 @@ static QJsonObject toolPayloadsObject(const Envelope &env)
     return {};
 }
 
+static void addSummaryField(QVBoxLayout *layout, QWidget *parent,
+                            const QString &caption, const QString &value)
+{
+    auto *field = new QWidget(parent);
+    auto *fieldLayout = new QVBoxLayout(field);
+    fieldLayout->setContentsMargins(0, 0, 0, 0);
+    fieldLayout->setSpacing(2);
+    auto *title = new QLabel(caption, field);
+    QFont titleFont = title->font();
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    fieldLayout->addWidget(title);
+    auto *description = new QLabel(value, field);
+    description->setTextFormat(Qt::PlainText);
+    description->setWordWrap(true);
+    description->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    fieldLayout->addWidget(description);
+    layout->addWidget(field);
+}
+
 DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(title);
     setModal(true);
-    resize(860, 560);
+    resize(680, 340);
+
+    QStringList warningLines;
+    for (const auto &warning : env.warnings) {
+        if (!warning.trimmed().isEmpty()) warningLines.append(warning);
+    }
+    QVector<WarningInfo> warningObjects;
+    for (const auto &warning : env.warning_objects) {
+        if (!warning.code.trimmed().isEmpty() || !warning.message.trimmed().isEmpty())
+            warningObjects.append(warning);
+    }
+    const int warningCount = warningLines.size() + warningObjects.size();
 
     auto *root = new QVBoxLayout(this);
     auto *tabs = new QTabWidget(this);
@@ -92,11 +126,15 @@ DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget 
 
     // Summary tab
     {
-        auto *w = new QWidget(this);
-        auto *form = new QFormLayout(w);
-        form->addRow(i18n("Command"), new QLabel(env.command.isEmpty() ? i18n("(unknown)") : env.command, w));
-        form->addRow(i18n("OK"), new QLabel(env.ok ? i18n("yes") : i18n("no"), w));
-        form->addRow(i18n("Image"), new QLabel(env.image.isEmpty() ? i18n("(none)") : env.image, w));
+        auto *scroll = new QScrollArea(tabs);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidgetResizable(true);
+        auto *w = new QWidget(scroll);
+        auto *summary = new QVBoxLayout(w);
+        summary->setSpacing(12);
+        addSummaryField(summary, w, i18n("Result"), env.ok ? i18n("Passed") : i18n("Failed"));
+        if (!env.command.isEmpty()) addSummaryField(summary, w, i18n("Command"), env.command);
+        if (!env.image.isEmpty()) addSummaryField(summary, w, i18n("Image"), env.image);
 
         QString err;
         if (env.has_error) {
@@ -109,60 +147,57 @@ DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget 
             } else {
                 err = i18n("code: %1", env.error.code);
             }
-        } else {
-            err = i18n("(none)");
         }
-        form->addRow(i18n("Error"), new QLabel(err, w));
-        form->addRow(i18n("Warnings"), new QLabel(i18n("%1", env.warnings.size() + env.warning_objects.size()), w));
-        tabs->addTab(w, i18n("Summary"));
+        if (env.has_error) addSummaryField(summary, w, i18n("Error"), err);
+        if (warningCount > 0)
+            addSummaryField(summary, w, i18n("Warnings"), QString::number(warningCount));
+        summary->addStretch(1);
+        scroll->setWidget(w);
+        tabs->addTab(scroll, i18n("Summary"));
     }
 
     // Warnings tab
-    {
+    if (warningCount > 0) {
         auto *w = new QWidget(this);
         auto *layout = new QVBoxLayout(w);
-
-        if (env.warnings.isEmpty() && env.warning_objects.isEmpty()) {
-            layout->addWidget(new QLabel(i18n("(none)"), w));
-        } else {
-            if (!env.warnings.isEmpty()) {
-                QStringList lines;
-                for (const auto &s : env.warnings) {
-                    lines << s;
-                }
-                layout->addWidget(makeReadOnlyText(lines.join(QStringLiteral("\n")), w));
+        if (!warningLines.isEmpty())
+            layout->addWidget(makeReadOnlyText(warningLines.join(QStringLiteral("\n")), w));
+        if (!warningObjects.isEmpty()) {
+            auto *table = new QTableWidget(w);
+            table->setColumnCount(2);
+            table->setHorizontalHeaderLabels({i18n("Code"), i18n("Message")});
+            table->horizontalHeader()->setStretchLastSection(true);
+            table->verticalHeader()->setVisible(false);
+            table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            table->setRowCount(warningObjects.size());
+            int r = 0;
+            for (const auto &wo : warningObjects) {
+                table->setItem(r, 0, new QTableWidgetItem(wo.code));
+                table->setItem(r, 1, new QTableWidgetItem(wo.message));
+                r++;
             }
-            if (!env.warning_objects.isEmpty()) {
-                auto *table = new QTableWidget(w);
-                table->setColumnCount(2);
-                table->setHorizontalHeaderLabels({i18n("Code"), i18n("Message")});
-                table->horizontalHeader()->setStretchLastSection(true);
-                table->verticalHeader()->setVisible(false);
-                table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-                table->setSelectionBehavior(QAbstractItemView::SelectRows);
-                table->setRowCount(env.warning_objects.size());
-                int r = 0;
-                for (const auto &wo : env.warning_objects) {
-                    table->setItem(r, 0, new QTableWidgetItem(wo.code));
-                    table->setItem(r, 1, new QTableWidgetItem(wo.message));
-                    r++;
-                }
-                layout->addWidget(table, 1);
-            }
+            layout->addWidget(table, 1);
         }
         tabs->addTab(w, i18n("Warnings"));
     }
 
     // Error tab
-    {
+    if (env.has_error) {
         auto *w = new QWidget(this);
         auto *form = new QFormLayout(w);
-        if (!env.has_error) {
-            form->addRow(new QLabel(i18n("(none)"), w));
-        } else {
-            form->addRow(i18n("Code"), new QLabel(QString::number(env.error.code), w));
-            form->addRow(i18n("Kind"), new QLabel(env.error.kind.isEmpty() ? i18n("(none)") : env.error.kind, w));
-            form->addRow(i18n("Message"), new QLabel(env.error.message.isEmpty() ? i18n("(none)") : env.error.message, w));
+        form->addRow(i18n("Code"), new QLabel(QString::number(env.error.code), w));
+        if (!env.error.kind.isEmpty()) {
+            auto *kindLabel = new QLabel(env.error.kind, w);
+            kindLabel->setTextFormat(Qt::PlainText);
+            kindLabel->setWordWrap(true);
+            form->addRow(i18n("Kind"), kindLabel);
+        }
+        if (!env.error.message.isEmpty()) {
+            auto *messageLabel = new QLabel(env.error.message, w);
+            messageLabel->setTextFormat(Qt::PlainText);
+            messageLabel->setWordWrap(true);
+            form->addRow(i18n("Message"), messageLabel);
         }
         tabs->addTab(w, i18n("Error"));
     }
@@ -172,20 +207,21 @@ DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget 
         auto *w = new QWidget(this);
         auto *layout = new QVBoxLayout(w);
         const QJsonObject tools = toolPayloadsObject(env);
-        if (tools.isEmpty()) {
-            layout->addWidget(new QLabel(i18n("(none)"), w));
-        } else {
+        if (!tools.isEmpty()) {
             auto *toolTabs = new QTabWidget(w);
             for (auto it = tools.begin(); it != tools.end(); ++it) {
                 const QString toolName = it.key();
-                auto *tw = new QWidget(toolTabs);
-                auto *tl = new QVBoxLayout(tw);
                 const QJsonObject payload = it.value().toObject();
 
                 const QString argv = jsonPretty(payload.value(QStringLiteral("argv")));
                 const QString stdoutText = jsonPretty(payload.value(QStringLiteral("stdout")));
                 const QString stderrText = jsonPretty(payload.value(QStringLiteral("stderr")));
                 const QString jsonText = jsonPretty(payload.value(QStringLiteral("json")));
+                if (argv.isEmpty() && stdoutText.isEmpty() && stderrText.isEmpty() && jsonText.isEmpty())
+                    continue;
+
+                auto *tw = new QWidget(toolTabs);
+                auto *tl = new QVBoxLayout(tw);
 
                 if (!argv.isEmpty()) {
                     tl->addWidget(new QLabel(i18n("argv:"), tw));
@@ -206,9 +242,11 @@ DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget 
 
                 toolTabs->addTab(tw, toolName);
             }
-            layout->addWidget(toolTabs, 1);
+            if (toolTabs->count() > 0) layout->addWidget(toolTabs, 1);
+            else delete toolTabs;
         }
-        tabs->addTab(w, i18n("Tools"));
+        if (layout->count() > 0) tabs->addTab(w, i18n("Tools"));
+        else delete w;
     }
 
     // Raw JSON tab
@@ -251,6 +289,7 @@ DetailsDialog::DetailsDialog(const Envelope &env, const QString &title, QWidget 
 bool criticalModalWithDetails(QWidget *parent, const QString &title, const QString &message, const Envelope &env)
 {
     QMessageBox box(QMessageBox::Critical, title, message, QMessageBox::Ok, parent);
+    box.setTextFormat(Qt::PlainText);
     auto *detailsBtn = box.addButton(i18n("Show details"), QMessageBox::ActionRole);
     box.exec();
     if (box.clickedButton() == detailsBtn) {

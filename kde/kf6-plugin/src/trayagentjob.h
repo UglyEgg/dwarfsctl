@@ -38,16 +38,14 @@ public:
 
     Envelope envelope() const { return m_env; }
 
-protected:
-    bool doKill() override;
-
 private:
+    void finish();
     void finishWithError(const QString& msg, const QString& kind, const QString& name = QString());
     void finishFromJson(const QString& json);
 
     Request m_req;
     Envelope m_env;
-    bool m_killed = false;
+    bool m_finished = false;
     QPointer<QDBusPendingCallWatcher> m_watcher;
 };
 

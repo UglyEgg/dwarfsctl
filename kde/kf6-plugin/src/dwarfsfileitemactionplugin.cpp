@@ -7,6 +7,7 @@
 #include <functional>
 
 #include <QAction>
+#include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -27,11 +28,14 @@
 
 #include "builddialog.h"
 #include "buildfeedback.h"
+#include "extractionfeedback.h"
 #include <QPointer>
+#include <QProgressDialog>
 #include "traydbus.h"
 #include "mountscache.h"
 #include "dwarfsctljson.h"
 #include "dwarfsctljob.h"
+#include "backendquery.h"
 #include "trayagentjob.h"
 #include "dwarfsctlrunner.h"
 #include "logging.h"
@@ -51,53 +55,50 @@ DwarfsFileItemActionPlugin::DwarfsFileItemActionPlugin(QObject *parent)
 namespace {
 
 
-// Strict SSOT rule: tool schema/metadata must come from dwarfsctl at runtime.
-// The plugin fails closed (no actions) if the schema cannot be obtained/parsed.
-static bool ensureToolsSchemaAvailable(QWidget *parent)
+class MenuReadiness final : public QObject {
+public:
+    MenuReadiness(QObject *owner, const QList<QAction *> &actions,
+                  QAction *status, QAction *retry)
+        : QObject(owner), m_status(status), m_retry(retry)
+    {
+        for (auto *action : actions) m_actions.append(action);
+        connect(retry, &QAction::triggered, this, [this] { refresh(); });
+        refresh();
+    }
+private:
+    void refresh()
+    {
+        if (m_job || !m_status || !m_retry) return;
+        for (const auto &action : m_actions) if (action) action->setEnabled(false);
+        m_status->setText(i18n("Preparing DwarFS actions…"));
+        m_status->setVisible(true);
+        m_retry->setVisible(false);
+        m_job = dwarfsplugin::BackendQuery::json(this,
+            {QStringLiteral("tools"), QStringLiteral("schema")},
+            [this](const dwarfsplugin::BackendReply &reply) {
+            m_job = nullptr;
+            if (!m_status || !m_retry) return;
+            const bool valid = reply.ok && reply.envelope.details.value(QStringLiteral("tools")).isArray();
+            for (const auto &action : m_actions) if (action) action->setEnabled(valid);
+            m_status->setText(i18n("DwarFS actions unavailable"));
+            m_status->setToolTip(reply.ok ? i18n("The DwarFS tool information is invalid.") : reply.error);
+            m_status->setVisible(!valid);
+            m_retry->setVisible(!valid);
+        });
+    }
+    QList<QPointer<QAction>> m_actions;
+    QPointer<QAction> m_status;
+    QPointer<QAction> m_retry;
+    QPointer<dwarfsplugin::DwarfsctlJob> m_job;
+};
+
+static void prepareMenu(QMenu *menu)
 {
-    static int cached = 0; // 0=unknown, 1=ok, -1=bad
-    if (cached == 1) {
-        return true;
-    }
-    if (cached == -1) {
-        return false;
-    }
-
-    using dwarfsplugin::parseEnvelope;
-
-    const auto res = DwarfsctlRunner::run({QStringLiteral("tools"), QStringLiteral("schema")},
-                                          DwarfsctlRunner::defaultTimeoutMs());
-
-    if (res.crashed || res.exit_code != 0) {
-        cached = -1;
-        QMessageBox::critical(parent,
-                              i18n("DwarFS integration unavailable"),
-                              i18n("Unable to execute dwarfsctl tools schema.\n\n"
-                                   "This integration is strict and will not guess tool metadata.\n"
-                                   "Please install or fix dwarfsctl and ensure it is on PATH."));
-        return false;
-    }
-
-    const auto pr = parseEnvelope(res.stdout_bytes);
-    if (!pr.parsed || !pr.envelope.ok) {
-        cached = -1;
-        QMessageBox::critical(parent,
-                              i18n("DwarFS integration unavailable"),
-                              i18n("dwarfsctl returned an invalid tools schema payload.\n\n"
-                                   "This integration is strict and will not fall back to hardcoded defaults."));
-        return false;
-    }
-    const QJsonValue toolsV = pr.envelope.details.value(QStringLiteral("tools"));
-    if (!toolsV.isArray()) {
-        cached = -1;
-        QMessageBox::critical(parent,
-                              i18n("DwarFS integration unavailable"),
-                              i18n("dwarfsctl tools schema is missing the required 'tools' array."));
-        return false;
-    }
-
-    cached = 1;
-    return true;
+    const auto actions = menu->actions();
+    auto *status = menu->addAction(i18n("Preparing DwarFS actions…"));
+    status->setEnabled(false);
+    auto *retry = menu->addAction(i18n("Retry"));
+    new MenuReadiness(menu, actions, status, retry);
 }
 
 static void showErrorDialogWithDetails(QWidget *parent, const QString &title, const QString &msg, const dwarfsplugin::Envelope &env)
@@ -147,7 +148,7 @@ static QString envMountpoint(const dwarfsplugin::Envelope &env)
     return {};
 }
 
-static void runDwarfsctlJob(QWidget *parentWidget,
+static void runResolvedDwarfsctlJob(QWidget *parentWidget,
                            const QString &title,
                            const QStringList &args,
                            int timeoutMs,
@@ -157,20 +158,66 @@ static void runDwarfsctlJob(QWidget *parentWidget,
 
     qCInfo(DWARFS_DOLPHIN_LOG) << "Starting dwarfsctl" << title << "args=" << args;
 
-    auto *job = new DwarfsctlJob(DwarfsctlJob::Request{title, args, timeoutMs}, parentWidget);
+    QStringList jobArgs = args;
+    QPointer<dwarfsplugin::BuildFeedback> feedback;
+    QPointer<ExtractionFeedback> extraction;
+    if (args.value(0) == QLatin1String("build")) {
+        const int outputIndex = args.indexOf(QStringLiteral("--output"));
+        const QString output = args.value(outputIndex + 1);
+        const bool preview = args.contains(QStringLiteral("--preview"));
+        feedback = new dwarfsplugin::BuildFeedback(output, parentWidget, preview);
+        if (preview) {
+            if (feedback->previewStage().isEmpty()) {
+                feedback->failed(i18n("Could not prepare a private location for the measured image."));
+                return;
+            }
+            jobArgs.insert(jobArgs.size() - 1, QStringLiteral("--preview-stage"));
+            jobArgs.insert(jobArgs.size() - 1, feedback->previewStage());
+            QObject::connect(feedback, &dwarfsplugin::BuildFeedback::createRequested, feedback,
+                             [feedback, output, source = args.last(), force = args.contains(QStringLiteral("--force")),
+                              parentWidget, timeoutMs, onSuccess](const QString &candidate, qint64 size) {
+                QStringList publishArgs{QStringLiteral("build"), QStringLiteral("--output"), output,
+                                        QStringLiteral("--publish-preview"), candidate,
+                                        QStringLiteral("--expected-size"), QString::number(size)};
+                if (force) publishArgs << QStringLiteral("--force");
+                publishArgs << source;
+                auto *publishJob = new DwarfsctlJob(
+                    DwarfsctlJob::Request{i18n("Create DwarFS Image"), publishArgs, timeoutMs, false}, feedback);
+                if (parentWidget) KJobWidgets::setWindow(publishJob, parentWidget);
+                QObject::connect(publishJob, &DwarfsctlJob::buildPhase, feedback,
+                                 &dwarfsplugin::BuildFeedback::phase);
+                QObject::connect(publishJob, &KJob::result, feedback,
+                                 [feedback, publishJob, onSuccess](KJob *) {
+                    if (!feedback) return;
+                    const auto env = publishJob->envelope();
+                    if (publishJob->error() != 0) {
+                        feedback->publishFailed(env.error.message.isEmpty() ? publishJob->errorText() : env.error.message, env);
+                        return;
+                    }
+                    feedback->published(env);
+                    onSuccess(env);
+                });
+                publishJob->start();
+            });
+        }
+    }
+    auto *job = new DwarfsctlJob(DwarfsctlJob::Request{title, jobArgs, timeoutMs, false}, parentWidget);
     if (parentWidget) {
         KJobWidgets::setWindow(job, parentWidget);
     }
 
-    QPointer<dwarfsplugin::BuildFeedback> feedback;
-    if (args.value(0) == QLatin1String("build")) {
-        const int outputIndex = args.indexOf(QStringLiteral("--output"));
-        feedback = new dwarfsplugin::BuildFeedback(args.value(outputIndex + 1), parentWidget);
+    if (feedback) {
         QObject::connect(job, &DwarfsctlJob::buildPhase, feedback, &dwarfsplugin::BuildFeedback::phase);
         QObject::connect(feedback, &dwarfsplugin::BuildFeedback::cancelRequested,
-                         job, [job] { job->kill(KJob::EmitResult); });
+                         job, [job] { job->kill(KJob::EmitResult); }, Qt::QueuedConnection);
     }
-    QObject::connect(job, &KJob::result, job, [parentWidget, onSuccess, title, feedback](KJob *j) {
+    if (args.value(0) == QLatin1String("extract")) {
+        extraction = new ExtractionFeedback(args.value(2), false, parentWidget);
+        extraction->show();
+        QObject::connect(extraction, &ExtractionFeedback::cancelRequested,
+                         job, [job] { job->kill(KJob::EmitResult); }, Qt::QueuedConnection);
+    }
+    QObject::connect(job, &KJob::result, job, [parentWidget, onSuccess, title, feedback, extraction](KJob *j) {
         auto *dj = qobject_cast<DwarfsctlJob *>(j);
         if (!dj) {
             return;
@@ -181,10 +228,14 @@ static void runDwarfsctlJob(QWidget *parentWidget,
         const auto env = dj->envelope();
 
         if (dj->error() != 0) {
-            if (feedback) feedback->failed();
-            if (dj->error() == KJob::KilledJobError) return;
-            // Strict UI rule: failures are a critical modal.
+            if (dj->error() == KJob::KilledJobError) {
+                if (feedback) feedback->cancelled();
+                if (extraction) extraction->cancelled();
+                return;
+            }
             const QString msg = !env.error.message.isEmpty() ? env.error.message : dj->errorText();
+            if (feedback) { feedback->failed(msg, env); return; }
+            if (extraction) { extraction->failed(msg, env); return; }
             showErrorDialogWithDetails(parentWidget,
                                        title,
                                        msg.isEmpty() ? i18n("Operation failed") : msg,
@@ -193,7 +244,7 @@ static void runDwarfsctlJob(QWidget *parentWidget,
         }
 
         const auto kind = dwarfsplugin::classifyEnvelope(env);
-        if (kind == dwarfsplugin::NotifyKind::Warning) {
+        if (!feedback && !extraction && kind == dwarfsplugin::NotifyKind::Warning) {
             dwarfsplugin::notifyResult(parentWidget,
                                        kind,
                                        title,
@@ -201,13 +252,46 @@ static void runDwarfsctlJob(QWidget *parentWidget,
         }
 
         if (feedback) feedback->complete(env);
+        if (extraction) extraction->complete(env);
         onSuccess(env);
     });
 
     job->start();
 }
 
-static void runTrayAgentJob(QWidget *parentWidget,
+static void withUiSettings(QWidget *parentWidget, const QString &title,
+                            std::function<void(const dwarfsctl_kde::UiConfig &)> dispatch)
+{
+    auto *progress = new QProgressDialog(i18n("Loading DwarFS settings…"), i18n("Cancel"), 0, 0, parentWidget);
+    progress->setWindowTitle(title);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(200);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    QObject::connect(progress, &QProgressDialog::canceled, progress, [progress] { progress->deleteLater(); });
+    progress->setValue(0);
+    dwarfsplugin::BackendQuery::ui(progress,
+        [progress, parentWidget, title, dispatch = std::move(dispatch)](bool ok, const dwarfsctl_kde::UiConfig &config, const QString &error) {
+        if (progress->wasCanceled()) { progress->deleteLater(); return; }
+        progress->hide();
+        progress->deleteLater();
+        if (!ok) QMessageBox::critical(parentWidget, title, error);
+        else dispatch(config);
+    });
+}
+
+static void runDwarfsctlJob(QWidget *parentWidget,
+                           const QString &title, const QStringList &args, bool build,
+                           const std::function<void(const dwarfsplugin::Envelope &)> &onSuccess)
+{
+    withUiSettings(parentWidget, title,
+        [parentWidget, title, args, build, onSuccess](const dwarfsctl_kde::UiConfig &config) {
+        runResolvedDwarfsctlJob(parentWidget, title, args,
+            build ? config.build_timeout_ms : config.command_timeout_ms, onSuccess);
+    });
+}
+
+static void runResolvedTrayAgentJob(QWidget *parentWidget,
                             const QString &title,
                             const QString &method,
                             const QList<QVariant> &args,
@@ -252,17 +336,29 @@ static void runTrayAgentJob(QWidget *parentWidget,
     job->start();
 }
 
+static void runTrayAgentJob(QWidget *parentWidget,
+                            const QString &title, const QString &method,
+                            const QList<QVariant> &args, bool openMounted,
+                            const std::function<void(const dwarfsplugin::Envelope &)> &onSuccess)
+{
+    withUiSettings(parentWidget, title,
+        [parentWidget, title, method, args, openMounted, onSuccess](const dwarfsctl_kde::UiConfig &config) {
+        runResolvedTrayAgentJob(parentWidget, title, method, args, config.command_timeout_ms,
+            [onSuccess, openMounted, config](const dwarfsplugin::Envelope &env) {
+            onSuccess(env);
+            const auto mountpoint = envMountpoint(env);
+            if (openMounted && config.open_after_mount && !mountpoint.isEmpty())
+                QDesktopServices::openUrl(QUrl::fromLocalFile(mountpoint));
+        });
+    });
+}
+
 } // namespace
 
 QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperties &fileItemInfos, QWidget *parentWidget)
 {
     const QString path = localPathFromSingleUrl(fileItemInfos);
     if (path.isEmpty()) {
-        return {};
-    }
-
-    // Fail-closed if dwarfsctl tool schema is not available.
-    if (!ensureToolsSchemaAvailable(parentWidget)) {
         return {};
     }
 
@@ -294,15 +390,18 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
             unmount->setIconVisibleInMenu(true);
             QObject::connect(unmount, &QAction::triggered, parentWidget,
                              [parentWidget, mountedImage, mountpoint = path]() {
-                dwarfsplugin::ensureTrayRunning();
                 runTrayAgentJob(parentWidget,
                                 i18n("Unmount %1", QFileInfo(mountedImage).fileName()),
                                 QStringLiteral("UnmountByMountpoint"),
                                 {mountpoint},
-                                DwarfsctlRunner::defaultTimeoutMs(),
+                                false,
                                 [](const dwarfsplugin::Envelope &) {});
             });
-            return {unmount};
+            auto *status = new QAction(i18n("Preparing DwarFS actions…"), unmount);
+            status->setEnabled(false);
+            auto *retry = new QAction(i18n("Retry DwarFS Actions"), unmount);
+            new MenuReadiness(unmount, {unmount}, status, retry);
+            return {unmount, status, retry};
         }
 
         // Folder context menu:
@@ -342,30 +441,26 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
             if (res.force) {
                 args << QStringLiteral("--force");
             }
-            if (res.overwriteOutput) {
-                args << QStringLiteral("--overwrite-output");
-            }
-            if (res.yes) {
-                args << QStringLiteral("--yes");
-            }
-            if (res.dryRun) {
-                args << QStringLiteral("--dry-run");
+            if (res.preview) {
+                args << QStringLiteral("--preview");
             }
             // SOURCE_DIR is a positional argument; keep it last so Clap doesn't
             // treat later options as additional positionals.
             args << path;
 
             runDwarfsctlJob(parentWidget,
-                           i18n("Build DwarFS image"),
+                           res.preview ? i18n("Measure DwarFS image") : i18n("Build DwarFS image"),
                            args,
-                           DwarfsctlRunner::buildTimeoutMs(),
-                           [](const dwarfsplugin::Envelope &env) {
+                           true,
+                           [preview = res.preview](const dwarfsplugin::Envelope &env) {
                                const QString out = env.image.isEmpty() ? i18n("(unknown)") : env.image;
-                              qCInfo(DWARFS_DOLPHIN_LOG) << "Build completed successfully output=" << out;
+                               const bool created = !preview || env.details.value(QStringLiteral("published_preview")).toBool();
+                               qCInfo(DWARFS_DOLPHIN_LOG) << (created ? "Build completed successfully" : "Preview measured") << "output=" << out;
                            });
         });
 
         rootMenu->addAction(buildAction);
+        prepareMenu(rootMenu);
         return {rootAction};
     }
 
@@ -423,16 +518,8 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
         runDwarfsctlJob(parentWidget,
                         i18n("Extract %1", imageName),
                         args,
-                        DwarfsctlRunner::buildTimeoutMs(),
-                        [parentWidget, imageName, dest](const dwarfsplugin::Envelope &) {
-                            QDesktopServices::openUrl(QUrl::fromLocalFile(dest));
-                            dwarfsplugin::notifyResult(parentWidget,
-                                                       dwarfsplugin::NotifyKind::Info,
-                                                       i18n("Extraction Complete"),
-                                                       i18n("%1 was extracted to %2.",
-                                                            imageName,
-                                                            QDir::toNativeSeparators(dest)));
-                        });
+                        true,
+                        [](const dwarfsplugin::Envelope &) {});
     });
 
     QAction *checkAction = new QAction(QIcon::fromTheme(QStringLiteral("tools-check-spelling")), i18n("Check Integrity…"), menu);
@@ -453,23 +540,12 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
     QAction *mountAction = new QAction(QIcon::fromTheme(QStringLiteral("media-mount")), i18n("Mount and Open"), menu);
     mountAction->setIconVisibleInMenu(true);
     QObject::connect(mountAction, &QAction::triggered, parentWidget, [parentWidget, imagePath, imageName]() {
-        dwarfsplugin::ensureTrayRunning();
         runTrayAgentJob(parentWidget,
                        i18n("Mount and Open %1", imageName),
                        QStringLiteral("Mount"),
                        {imagePath},
-                       DwarfsctlRunner::defaultTimeoutMs(),
-                       [parentWidget](const dwarfsplugin::Envelope &env) {
-                           const QString mountpoint = envMountpoint(env);
-                           // Mounting an image is how you look inside it, so open it
-                           // unless the user has turned that off. This is the behaviour
-                           // that makes a .dwarfs file feel like a disk image rather
-                           // than a file you have to go find afterwards.
-                           if (!DwarfsctlRunner::openAfterMount() || mountpoint.isEmpty()) {
-                               return;
-                           }
-                           QDesktopServices::openUrl(QUrl::fromLocalFile(mountpoint));
-                       });
+                       true,
+                       [](const dwarfsplugin::Envelope &) {});
     });
 
     // Unmount
@@ -477,7 +553,6 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
     unmountAction->setIconVisibleInMenu(true);
     QObject::connect(unmountAction, &QAction::triggered, parentWidget,
                      [parentWidget, imagePath, imageName, currentMountpoint]() {
-        dwarfsplugin::ensureTrayRunning();
         const bool haveMountpoint = !currentMountpoint.isEmpty();
         const QString method = haveMountpoint ? QStringLiteral("UnmountByMountpoint")
                                               : QStringLiteral("UnmountByImage");
@@ -488,7 +563,7 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
                        i18n("Unmount %1", imageName),
                        method,
                        args,
-                       DwarfsctlRunner::defaultTimeoutMs(),
+                       false,
                        [](const dwarfsplugin::Envelope &) {});
     });
 
@@ -505,6 +580,7 @@ QList<QAction *> DwarfsFileItemActionPlugin::actions(const KFileItemListProperti
     menu->addAction(checkAction);
     menu->addAction(checksumAction);
 
+    prepareMenu(menu);
     return {rootAction};
 }
 

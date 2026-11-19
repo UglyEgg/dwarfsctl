@@ -3,16 +3,9 @@
 //
 // Reads an image listing from `dwarfsctl ls`.
 //
-// The worker deliberately knows NOTHING about DwarFS or about `dwarfsck`. It runs
-// one backend command and reads one JSON envelope. Every operation that touches
-// an image goes through `dwarfsctl`, so that tool lookup,
-// error classification and DwarFS-version handling stay in one place instead of
-// being re-implemented per KDE component.
-//
-// Consequence worth stating: the C++ side has no DwarFS tool dependencies at all,
-// which is why its tests run anywhere. The parse of dwarfsck's own nested tree
-// lives in the backend (`cpp/cli/operations.cpp`), where it is tested against a
-// fixture captured from the real tool.
+// The KIO worker depends on the public backend protocol, not DwarFS libraries.
+// Image parsing and version handling stay in the backend; the worker decodes
+// path-keyed entries and maps operational errors to KIO.
 
 #pragma once
 
@@ -54,11 +47,9 @@ struct ListResult {
 /// genuinely has no entries, and those two states must stay distinguishable --
 /// conflating them renders an unreachable image as a valid empty directory.
 ///
-/// The successful listing is remembered for this image (keyed by the image
-/// file's size and modification time), because a directory browse issues one
-/// listing followed by a `stat()` per entry, and re-listing the whole image per
-/// `stat()` made entering an 80-file directory cost ~80 backend calls (review
-/// finding F4).
+/// A bounded single-image cache uses FileIdentity metadata to detect source
+/// changes. Its path index serves stat() requests after listDir() without
+/// repeated backend calls; oversized listings succeed without being retained.
 ListResult listImage(const QString &imagePath, int timeoutMs = 300000);
 
 /// Resolve exactly one entry by path -- the `stat()` primitive.

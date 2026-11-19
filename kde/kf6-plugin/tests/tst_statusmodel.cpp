@@ -46,6 +46,21 @@ private Q_SLOTS:
         QCOMPARE(details.features, QStringList{QStringLiteral("history")});
     }
 
+    void unavailableAuthorityDoesNotReusePreviousMountKnowledge()
+    {
+        StatusDetails details;
+        details.mounted_present = true;
+        details.mounted = true;
+        details.mountpoint = QStringLiteral("/previous");
+        const auto parsed = parseEnvelope(QByteArrayLiteral(
+            R"({"ok":true,"details":{"mount_state_known":false,"mounted":true,"mountpoint":"/stale"}})"));
+        QVERIFY(parsed.parsed);
+        QVERIFY(decodeStatus(parsed.envelope, &details).ok);
+        QVERIFY(!details.mounted_present);
+        QVERIFY(!details.mounted);
+        QVERIFY(details.mountpoint.isEmpty());
+    }
+
     void acceptsLightweightMountStatus()
     {
         const auto parsed = parseEnvelope(QByteArrayLiteral(

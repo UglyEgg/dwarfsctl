@@ -2,7 +2,7 @@ ARG BASE=debian:trixie-slim
 FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl xz-utils cmake ninja-build g++ pkg-config python3 \
+    ca-certificates curl xz-utils patch cmake ninja-build g++ pkg-config python3 \
     libboost-chrono-dev libboost-filesystem-dev libboost-program-options-dev \
     nlohmann-json3-dev libssl-dev libarchive-dev libxxhash-dev libzstd-dev liblz4-dev liblzma-dev \
     libbrotli-dev libflac++-dev libfmt-dev librange-v3-dev libparallel-hashmap-dev \

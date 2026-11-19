@@ -188,6 +188,20 @@ private Q_SLOTS:
         QVERIFY(r.error.contains(QStringLiteral("notes.txt")));
     }
 
+    void failureDiagnosticPrecedence()
+    {
+        const auto malformed = parseEnvelope("not json", 127, "loader: missing library\n");
+        QCOMPARE(malformed.error, QStringLiteral("loader: missing library"));
+        const auto emptyMessage = parseEnvelope(R"({"ok":false,"error":{"message":""}})", 9, "backend detail");
+        QCOMPARE(emptyMessage.error, QStringLiteral("backend detail"));
+        const auto named = parseEnvelope(kNotAnImageEnvelope, 4, "secondary detail");
+        QVERIFY(named.error.contains(QStringLiteral("not a DwarFS image")));
+        QVERIFY(!named.error.contains(QStringLiteral("secondary detail")));
+        const auto noDetail = parseEnvelope({}, 9, {});
+        QCOMPARE(noDetail.error, QStringLiteral("dwarfsctl ls failed (exit code 9)"));
+        QVERIFY(!malformed.ok && !emptyMessage.ok && !named.ok && !noDetail.ok);
+    }
+
     void errorKindIsExposedForMapping()
     {
         // The worker maps on kind, not on message text, so a reworded backend

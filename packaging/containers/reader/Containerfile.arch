@@ -1,6 +1,6 @@
 FROM docker.io/library/archlinux:base-devel
 RUN pacman -Syu --noconfirm && pacman -S --needed --noconfirm \
-    cmake ninja python curl licenses boost openssl libarchive xxhash zstd lz4 xz brotli \
+    cmake ninja python curl patch licenses boost openssl libarchive xxhash zstd lz4 xz brotli \
     flac fmt range-v3 utf8cpp nlohmann-json tomlplusplus fuse3 qt6-base \
     qt6-tools qt6-svg qt6-wayland extra-cmake-modules kcoreaddons ki18n kio \
     kjobwidgets knotifications kstatusnotifieritem kiconthemes dbus \

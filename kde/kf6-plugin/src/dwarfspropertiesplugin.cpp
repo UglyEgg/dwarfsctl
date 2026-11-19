@@ -4,6 +4,7 @@
 #include "dwarfspropertiesplugin.h"
 
 #include "dwarfsctljob.h"
+#include "backendquery.h"
 #include "dwarfsctljson.h"
 #include "dwarfsctlmodel.h"
 #include "dwarfsctlrunner.h"
@@ -30,6 +31,7 @@
 #include <QLabel>
 #include <QLocale>
 #include <QPushButton>
+#include <QProgressDialog>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -62,7 +64,7 @@ static StatusDetails cachedMountStatus(const QString &imagePath)
     auto *mounts = MountsCache::instance();
     mounts->ensureStarted();
     StatusDetails details;
-    details.mounted_present = true;
+    details.mounted_present = mounts->isKnown();
     details.mountpoint = mounts->mountpointForImage(imagePath);
     details.mounted = !details.mountpoint.isEmpty();
     return details;
@@ -143,7 +145,7 @@ static void applyLiveMountStatus(const StatusDetails &mount, View &v)
     refreshUi(mount, v);
 }
 
-static void runJob(QWidget *parent,
+static void runResolvedJob(QWidget *parent,
                    const QString &title,
                    const QStringList &args,
                    int timeoutMs,
@@ -174,14 +176,13 @@ static void runJob(QWidget *parent,
     job->start();
 }
 
-static void runTrayAgentJob(QWidget *parent,
+static void runResolvedTrayAgentJob(QWidget *parent,
                             const QString &title,
                             const QString &method,
                             const QList<QVariant> &args,
                             int timeoutMs,
                             const std::function<void(const Envelope &)> &onDone)
 {
-    dwarfsplugin::ensureTrayRunning();
 
     auto *job = new TrayAgentJob(TrayAgentJob::Request{title, method, args, timeoutMs}, parent);
     if (parent) {
@@ -206,6 +207,36 @@ static void runTrayAgentJob(QWidget *parent,
     });
 
     job->start();
+}
+
+static void runJob(QWidget *parent, const QString &title, const QStringList &args,
+                   const std::function<void(const Envelope &)> &onDone)
+{
+    BackendQuery::ui(parent, [parent, title, args, onDone](bool ok, const dwarfsctl_kde::UiConfig &config, const QString &error) {
+        if (!ok) { criticalModalWithDetails(parent, title, error, {}); return; }
+        runResolvedJob(parent, title, args, config.command_timeout_ms, onDone);
+    });
+}
+
+static void runTrayAgentJob(QWidget *parent, const QString &title, const QString &method,
+                            const QList<QVariant> &args,
+                            const std::function<void(const Envelope &)> &onDone)
+{
+    auto *progress = new QProgressDialog(i18n("Loading DwarFS settings…"), i18n("Cancel"), 0, 0, parent);
+    progress->setWindowTitle(title);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(200);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    QObject::connect(progress, &QProgressDialog::canceled, progress, [progress] { progress->deleteLater(); });
+    progress->setValue(0);
+    BackendQuery::ui(progress, [progress, parent, title, method, args, onDone](bool ok, const dwarfsctl_kde::UiConfig &config, const QString &error) {
+        if (progress->wasCanceled()) { progress->deleteLater(); return; }
+        progress->hide();
+        progress->deleteLater();
+        if (!ok) { criticalModalWithDetails(parent, title, error, {}); return; }
+        runResolvedTrayAgentJob(parent, title, method, args, config.command_timeout_ms, onDone);
+    });
 }
 
 DwarfsPropertiesPlugin::DwarfsPropertiesPlugin(QObject *parent, const QVariantList &args)
@@ -249,6 +280,10 @@ DwarfsPropertiesPlugin::DwarfsPropertiesPlugin(QObject *parent, const QVariantLi
     v->created = new QLabel(i18n("Reading…"), detailsBox);
     v->createdBy = new QLabel(i18n("Reading…"), detailsBox);
     v->formatVersion = new QLabel(i18n("Reading…"), detailsBox);
+    for (auto *label : {v->contents, v->originalSize, v->compression,
+                        v->created, v->createdBy, v->formatVersion})
+        label->setTextFormat(Qt::PlainText);
+    v->createdBy->setObjectName(QStringLiteral("imageCreatedBy"));
     v->createdBy->setWordWrap(true);
 
     form->addRow(i18n("Contents:"), v->contents);
@@ -265,6 +300,9 @@ DwarfsPropertiesPlugin::DwarfsPropertiesPlugin(QObject *parent, const QVariantLi
     mountForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignTop);
     v->mounted = new QLabel(mountBox);
     v->mountpoint = new QLabel(mountBox);
+    v->mounted->setTextFormat(Qt::PlainText);
+    v->mountpoint->setTextFormat(Qt::PlainText);
+    v->mountpoint->setObjectName(QStringLiteral("imageMountpoint"));
     v->mountpoint->setWordWrap(true);
     v->mountpoint->setTextInteractionFlags(Qt::TextSelectableByMouse);
     mountForm->addRow(i18n("Status:"), v->mounted);
@@ -290,17 +328,16 @@ DwarfsPropertiesPlugin::DwarfsPropertiesPlugin(QObject *parent, const QVariantLi
         applyLiveMountStatus(cachedMountStatus(imagePath), *v);
     });
 
-    QObject::connect(v->primaryButton, &QPushButton::clicked, page, [dialog, imagePath, v]() {
+    QObject::connect(v->primaryButton, &QPushButton::clicked, page, [page, imagePath, v]() {
         if (!v->currentMountpoint.isEmpty()) {
             QDesktopServices::openUrl(QUrl::fromLocalFile(v->currentMountpoint));
             return;
         }
 
-        runTrayAgentJob(dialog,
+        runTrayAgentJob(page,
                         i18n("Mount and Open"),
                         QStringLiteral("Mount"),
                         {imagePath},
-                        DwarfsctlRunner::defaultTimeoutMs(),
         [v](const Envelope &env) {
             const QString mountpoint = env.details.value(QStringLiteral("mountpoint")).toString();
             if (!mountpoint.isEmpty()) {
@@ -327,10 +364,9 @@ DwarfsPropertiesPlugin::DwarfsPropertiesPlugin(QObject *parent, const QVariantLi
     // Reading the full DwarFS metadata can take noticeable time for a large
     // image. Populate the page asynchronously and keep mount controls usable
     // while it is loading.
-    runJob(dialog,
+    runJob(page,
            i18n("Read DwarFS Metadata"),
            {QStringLiteral("status"), imagePath},
-           DwarfsctlRunner::defaultTimeoutMs(),
            [imagePath, v](const Envelope &richEnvelope) {
         Envelope combined = richEnvelope;
 

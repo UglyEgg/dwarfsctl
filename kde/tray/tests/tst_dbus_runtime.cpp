@@ -6,6 +6,9 @@
 #include <QDBusConnectionInterface>
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDBusPendingReply>
+#include <QLockFile>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -30,7 +33,15 @@ class RuntimeContract : public QObject {
     QJsonObject call(const QString &method, const QVariantList &args = {}) {
         QDBusInterface proxy(service, path, interface, QDBusConnection::sessionBus());
         proxy.setTimeout(5000);
-        const auto reply = proxy.callWithArgumentList(QDBus::Block, method, args);
+        auto reply = proxy.callWithArgumentList(QDBus::Block, method, args);
+        QElapsedTimer timer; timer.start();
+        while (reply.type() != QDBusMessage::ErrorMessage && reply.arguments().size() == 1
+            && QJsonDocument::fromJson(reply.arguments().first().toString().toUtf8()).object()
+                .value(QStringLiteral("error")).toObject().value(QStringLiteral("kind")).toString() == QLatin1String("Busy")
+            && timer.elapsed() < 5000) {
+            QTest::qWait(20);
+            reply = proxy.callWithArgumentList(QDBus::Block, method, args);
+        }
         if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().size() != 1) {
             QTest::qFail(qPrintable(reply.errorMessage()), __FILE__, __LINE__);
             return {};
@@ -108,12 +119,50 @@ private Q_SLOTS:
         for (const QStringList args : {QStringList{"mount", "list"}, QStringList{"mount", "status", home.filePath("absent.dwarfs")}, QStringList{"unmount", "all"}, QStringList{"unmount", "last"}}) {
             QProcess proc;
             proc.setProcessEnvironment(tray.processEnvironment());
-            proc.start(cli, args);
-            QVERIFY(proc.waitForFinished(10000));
+            QElapsedTimer readiness; readiness.start();
+            QJsonObject object;
+            for (;;) {
+                proc.start(cli, args);
+                QVERIFY(proc.waitForFinished(10000));
+                object = QJsonDocument::fromJson(proc.readAllStandardOutput()).object();
+                // Service ownership precedes its initial refresh, and a
+                // mutation schedules another refresh. Busy explicitly rejects
+                // dispatch; timeouts and other uncertain outcomes are not retried.
+                if (proc.exitCode() != 1 || object.value(QStringLiteral("error")).toObject()
+                        .value(QStringLiteral("kind")).toString() != QLatin1String("Busy")
+                    || readiness.elapsed() >= 5000) break;
+                QTest::qWait(20);
+            }
             QCOMPARE(proc.exitCode(), 0);
-            const auto object = QJsonDocument::fromJson(proc.readAllStandardOutput()).object();
             QCOMPARE(object.value("ok"), QJsonValue(true));
         }
+    }
+
+    void pendingRegistryWorkKeepsDbusResponsive()
+    {
+        // A genuine held registry lock keeps the executor busy without any
+        // mount, engine helper, or instrumentation in the service.
+        QVERIFY(call(QStringLiteral("ListMounts")).value(QStringLiteral("ok")).toBool());
+        QTest::qWait(100);
+        QLockFile lock(home.filePath(QStringLiteral("runtime/dwarfsctl/mounts.lock")));
+        bool acquired = false;
+        QTRY_VERIFY_WITH_TIMEOUT((acquired = acquired || lock.tryLock()), 7000);
+        QDBusInterface proxy(service, path, interface, QDBusConnection::sessionBus());
+        proxy.setTimeout(7000);
+        QDBusPendingReply<QString> pending = proxy.asyncCall(QStringLiteral("ListMounts"));
+        QTest::qWait(100);
+        QElapsedTimer timer; timer.start();
+        QDBusReply<int> version = proxy.call(QStringLiteral("ApiMajor"));
+        QVERIFY(version.isValid());
+        QCOMPARE(version.value(), 1);
+        QVERIFY2(timer.elapsed() < 1000, "Mount authority blocked the D-Bus event loop");
+        const auto reply = proxy.call(QStringLiteral("Status"), QStringLiteral("/absent.dwarfs"));
+        QCOMPARE(reply.type(), QDBusMessage::ReplyMessage);
+        const auto busy = QJsonDocument::fromJson(reply.arguments().first().toString().toUtf8()).object();
+        QCOMPARE(busy.value(QStringLiteral("error")).toObject().value(QStringLiteral("kind")).toString(), QStringLiteral("Busy"));
+        lock.unlock();
+        QTRY_VERIFY_WITH_TIMEOUT(pending.isFinished(), 7000);
+        QVERIFY(!pending.isError());
     }
 
     void methodsAndSignals() {
@@ -142,18 +191,21 @@ private Q_SLOTS:
 
         // /proc is already a readable mount. Only the isolated registry is changed;
         // never call an unmount method while this fixture is present.
-        const QJsonArray mounted{QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("mountpoint"), QStringLiteral("/proc")}}};
+        // Match the kernel's actual source name for this read-only reference.
+        // This is notification/serialization evidence, not a DwarFS mount.
+        const QString referenceSource = QStringLiteral("proc");
+        const QJsonArray mounted{QJsonObject{{QStringLiteral("image"), referenceSource}, {QStringLiteral("mountpoint"), QStringLiteral("/proc")}}};
         registry(mounted);
         QTRY_VERIFY_WITH_TIMEOUT(!snapshots.isEmpty(), 10000);
         QCOMPARE(snapshots.last(), mounted);
-        QTRY_VERIFY_WITH_TIMEOUT(placesContents().contains("missing"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(placesContents().contains("proc"), 10000);
         QVERIFY(!placesContents().contains("(DwarFS volume)"));
         QVERIFY(placesContents().contains("dwarfsctl-volume"));
         QVERIFY(placesContents().contains("file:///proc"));
         result = call(QStringLiteral("ListMounts"));
         envelope(result, QStringLiteral("mount_list"), true);
         QCOMPARE(result.value(QStringLiteral("details")).toObject().value(QStringLiteral("mounts")).toArray(), mounted);
-        result = call(QStringLiteral("Status"), {image});
+        result = call(QStringLiteral("Status"), {referenceSource});
         QCOMPARE(result.value(QStringLiteral("details")).toObject().value(QStringLiteral("mounted")), QJsonValue(true));
         const auto count = snapshots.size();
         registry({});
@@ -162,6 +214,34 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(!placesContents().contains("file:///proc"), 10000);
         result = call(QStringLiteral("ListMounts"));
         QCOMPARE(result.value(QStringLiteral("details")).toObject().value(QStringLiteral("count")).toInt(), 0);
+    }
+
+    void registryRotationDeletionAndRecreation()
+    {
+        const QJsonArray mounted{QJsonObject{{QStringLiteral("image"), QStringLiteral("proc")},
+            {QStringLiteral("mountpoint"), QStringLiteral("/proc")}}};
+        registry(mounted);
+        QTRY_VERIFY_WITH_TIMEOUT(!snapshots.isEmpty() && snapshots.last() == mounted, 10000);
+        QVERIFY(QFile::remove(home.filePath(QStringLiteral("runtime/dwarfsctl/mounts.json"))));
+        QTRY_VERIFY_WITH_TIMEOUT(!snapshots.isEmpty() && snapshots.last().isEmpty(), 10000);
+        registry(mounted);
+        QTRY_VERIFY_WITH_TIMEOUT(!snapshots.isEmpty() && snapshots.last() == mounted, 10000);
+        registry({});
+        QTRY_VERIFY_WITH_TIMEOUT(!snapshots.isEmpty() && snapshots.last().isEmpty(), 10000);
+    }
+
+    void idleAuthorityDoesNotRescheduleForItsOwnLocks()
+    {
+        QVERIFY(call(QStringLiteral("ListMounts")).value(QStringLiteral("ok")).toBool());
+        QTest::qWait(200);
+        QDBusInterface proxy(service, path, interface, QDBusConnection::sessionBus());
+        for (int i = 0; i < 20; ++i) {
+            const auto reply = proxy.call(QStringLiteral("Status"), QStringLiteral("/absent.dwarfs"));
+            QCOMPARE(reply.type(), QDBusMessage::ReplyMessage);
+            const auto value = QJsonDocument::fromJson(reply.arguments().first().toString().toUtf8()).object();
+            QVERIFY2(value.value(QStringLiteral("ok")).toBool(), "An idle authority was starved by its own refresh notifications");
+            QTest::qWait(10);
+        }
     }
 
     void cleanupTestCase() {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "aboutdialog.h"
-#include "dwarfsctlrunner.h"
+#include "backendquery.h"
 #include "uipresentation.h"
 
 #include <KLocalizedString>
@@ -37,21 +37,6 @@ QString resourceText(const QString &path, const QString &fallback)
 {
     QFile file(path);
     return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : fallback;
-}
-
-QString dwarfsctlVersionString()
-{
-    const auto result = DwarfsctlRunner::run({QStringLiteral("--version")},
-                                              DwarfsctlRunner::defaultTimeoutMs());
-    if (result.crashed) {
-        return i18n("(unavailable)");
-    }
-    QString output = QString::fromUtf8(result.stdout_bytes).trimmed();
-    if (output.isEmpty()) {
-        output = QString::fromUtf8(result.stderr_bytes).trimmed();
-    }
-    return output.isEmpty() ? i18n("(unknown)")
-                            : output.section(QLatin1Char('\n'), 0, 0).trimmed();
 }
 
 QLabel *wrappedLabel(const QString &text, QWidget *parent)
@@ -251,7 +236,33 @@ AboutDialog::AboutDialog(QWidget *parent)
     auto *versions = new QFormLayout(versionsBox);
     versions->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     versions->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    versions->addRow(i18n("Command-line tool:"), new QLabel(dwarfsctlVersionString(), versionsBox));
+    auto *versionRow = new QWidget(versionsBox);
+    auto *versionLayout = new QHBoxLayout(versionRow);
+    versionLayout->setContentsMargins(0, 0, 0, 0);
+    auto *backendVersion = new QLabel(i18n("Checking…"), versionRow);
+    backendVersion->setObjectName(QStringLiteral("backendVersion"));
+    backendVersion->setTextFormat(Qt::PlainText);
+    backendVersion->setWordWrap(true);
+    auto *versionRetry = new QToolButton(versionRow);
+    versionRetry->setObjectName(QStringLiteral("backendVersionRetry"));
+    versionRetry->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));
+    versionRetry->setToolTip(i18n("Check the command-line version again"));
+    versionLayout->addWidget(backendVersion, 1);
+    versionLayout->addWidget(versionRetry);
+    auto loadVersion = [versionsBox, backendVersion, versionRetry] {
+        versionRetry->setEnabled(false);
+        backendVersion->setText(i18n("Checking…"));
+        dwarfsplugin::BackendQuery::text(versionsBox, {QStringLiteral("--version")},
+            [backendVersion, versionRetry](const dwarfsplugin::BackendReply &reply) {
+            const auto version = reply.text.trimmed().section(QLatin1Char('\n'), 0, 0).trimmed();
+            backendVersion->setText(reply.ok && !version.isEmpty() ? version : i18n("Unavailable"));
+            backendVersion->setToolTip(reply.ok ? QString() : reply.error);
+            versionRetry->setEnabled(true);
+        });
+    };
+    connect(versionRetry, &QToolButton::clicked, versionsBox, loadVersion);
+    versions->addRow(i18n("Command-line tool:"), versionRow);
+    loadVersion();
     versions->addRow(i18n("Tray integration:"), new QLabel(QString::fromLatin1(DWARFSCTL_TRAY_VERSION), versionsBox));
     versions->addRow(i18n("Dolphin integration:"), new QLabel(QString::fromLatin1(DWARFSCTL_PLUGIN_VERSION), versionsBox));
     versions->addRow(i18n("D-Bus interface:"), new QLabel(QString::number(DWARFSCTL_DBUS_API_MAJOR), versionsBox));

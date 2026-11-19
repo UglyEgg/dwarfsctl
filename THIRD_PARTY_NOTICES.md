@@ -1,10 +1,13 @@
 # Third-party notices
 
 The private C++ engine embeds checksum-pinned DwarFS 0.15.7. Its exact release
-source archive is shipped in `/usr/share/dwarfsctl/sources/`; copyright and
+source archive and the local extractor patches are shipped in
+`/usr/share/dwarfsctl/sources/`; copyright and
 license texts are in `/usr/share/licenses/dwarfsctl/`. See
 `CONTRIBUTING.md` for the source and redistribution boundary. The download URL
-and integrity pin are recorded in `packaging/build-reader.sh`.
+and integrity pin are recorded in `packaging/build-reader.sh`. The patches add
+an opt-in extractor option to preserve selected empty directories and reject
+unsafe stored filename components before extraction writes begin.
 
 DwarFS common, reader, decompressor and extractor libraries are MIT-licensed.
 Writer/rewrite and relevant tool code are GPL-3.0-or-later. The combined

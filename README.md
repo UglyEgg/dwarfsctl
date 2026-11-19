@@ -13,8 +13,8 @@
 
 DwarFSctl brings compressed filesystem images to the KDE desktop. Open **DwarFS
 Utility**, the standalone app, to create images, inspect their contents, compare
-compression, mount volumes and extract files. Its visual Contents view helps you
-explore what takes up space inside an image.
+compression, mount volumes and extract files. The Files view lets you browse
+and select items to extract; Size Map shows what takes up space.
 
 The same tools are available directly in Dolphin, with file previews, an image
 Properties page and mounted volumes in Places. A Plasma tray application gives
@@ -36,13 +36,19 @@ the Dolphin integration. Open **DwarFS Utility** from your application launcher.
 
 ![DwarFS Utility showing image size, compression savings and image details](docs/screenshots/utility-overview.png)
 
-Switch to **Contents** to explore the image's folders by size. Point to a ring
-to see its path and contents.
+Use **Files** to browse folders without mounting the image. Select files or
+folders, then choose **Extract Selected…**. Choose **Extract All…** for the whole
+image. Both actions create a new folder inside your chosen destination and keep
+the original folder paths; existing folders are never overwritten.
+
+Switch to **Size Map** to explore folders by size. Point to a ring to see its
+path and contents.
 
 ![DwarFS Utility showing the Content Rings view](docs/screenshots/utility-contents.png)
 
 Screenshots show DwarFSctl 0.13.1 with a sample image containing project
 documentation, artwork and source files, rendered with KDE's Breeze style.
+The development version adds Files and renames Contents to Size Map.
 
 ## Install
 
@@ -82,7 +88,19 @@ In Dolphin:
 
 Open **DwarFS Utility** from the application launcher when you want to inspect
 or manage several images in one place. Its Overview compares the original and
-compressed sizes; Contents shows a bounded visual map of the image hierarchy.
+compressed sizes; Files supports browsing and selective extraction; Size Map
+shows a bounded visual map of the image hierarchy.
+
+Utility and the tray share recent-image history and its limit in Settings.
+Turning history off keeps currently open images usable. Unavailable images stay
+in the list with **Locate Image…**; **Show Image in Folder** reveals the source
+file. Removing entries or clearing history never deletes images or unmounts
+volumes.
+
+Creation, extraction and checks show progress and elapsed time in their own
+window. Cancel waits for cleanup before reporting cancellation; closing the
+window requests cancellation and waits before closing. Mount operations show
+their result but cannot be cancelled once dispatched.
 
 The command-line interface exposes the same engine for scripts:
 
@@ -91,6 +109,8 @@ dwarfsctl build ./folder --output ./archive.dwarfs
 dwarfsctl status ./archive.dwarfs
 dwarfsctl mount ./archive.dwarfs
 dwarfsctl extract ./archive.dwarfs ./restored
+# Extract just one folder, keeping its archive-relative path:
+dwarfsctl extract ./archive.dwarfs ./selected --path /Documents
 dwarfsctl unmount ./archive.dwarfs
 ```
 

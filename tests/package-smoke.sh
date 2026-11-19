@@ -85,5 +85,37 @@ test -f /usr/share/dbus-1/services/org.quest.entropy.dwarfsctl.Tray.service
 test -f /usr/share/dwarfsctl/sources/dwarfs-0.15.7.tar.xz
 QT_QPA_PLATFORM=offscreen /usr/bin/dwarfsctl-thumbnailer "$test_home/test.dwarfs" "$test_home/thumbnail.png" 128
 test -s "$test_home/thumbnail.png"
-QT_QPA_PLATFORM=offscreen dbus-run-session -- /usr/bin/dwarfsctl mount list
+# A freshly activated authority may still be reconciling its registry. Busy is
+# a pre-admission response; retry only that explicit result on the same bus.
+QT_QPA_PLATFORM=offscreen timeout 10s dbus-run-session -- python3 - <<'PYREADY'
+import json
+import subprocess
+import sys
+import time
+
+deadline = time.monotonic() + 5
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        sys.exit("Mount service did not become ready")
+    result = subprocess.run(["/usr/bin/dwarfsctl", "mount", "list"],
+                            capture_output=True, text=True, timeout=remaining)
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    try:
+        reply = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        sys.exit("Mount service returned invalid JSON")
+    if not isinstance(reply, dict):
+        sys.exit("Mount service returned an invalid envelope")
+    if result.returncode == 0:
+        if reply.get("ok") is not True or not isinstance(reply.get("details"), dict) or not isinstance(reply["details"].get("mounts"), list):
+            sys.exit("Mount service returned an invalid snapshot")
+        break
+    error = reply.get("error")
+    if (result.returncode != 1 or reply.get("ok") is not False or not isinstance(error, dict)
+            or error.get("kind") != "Busy" or type(error.get("code")) is not int or error["code"] != 1):
+        sys.exit(result.returncode)
+    time.sleep(0.05)
+PYREADY
 echo 'Installed package smoke test passed'

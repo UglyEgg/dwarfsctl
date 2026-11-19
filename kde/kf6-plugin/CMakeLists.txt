@@ -19,6 +19,8 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings)
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets DBus)
 
 # Many distros (including Arch) do not ship a top-level KF6Config.cmake.
@@ -34,8 +36,11 @@ include("${KF6CoreAddons_DIR}/KF6CoreAddonsMacros.cmake")
 include("${KF6I18n_DIR}/KF6I18nMacros.cmake")
 
 set(COMMON_SOURCES
-    src/dwarfsctlrunner.cpp
-    src/dwarfsctlrunner.h
+    src/backendquery.h
+    ../common/operationstatus.cpp
+    ../common/operationstatus.h
+    ../common/dwarfsctlrunner.cpp
+    ../common/dwarfsctlrunner.h
     src/dwarfsctljob.cpp
     src/dwarfsctljob.h
     src/envelopetext.cpp
@@ -48,8 +53,8 @@ set(COMMON_SOURCES
     src/dwarfsctljson.h
     src/dwarfsctlmodel.cpp
     src/dwarfsctlmodel.h
-    src/warnings.cpp
-    src/warnings.h
+
+
     src/logging.cpp
     src/logging.h
     src/notifications.cpp
@@ -59,6 +64,8 @@ set(COMMON_SOURCES
 )
 
 set(FILEITEM_PLUGIN_SOURCES
+    src/extractionfeedback.cpp
+    src/extractionfeedback.h
     src/recommendation.cpp
     src/recommendation.h
     src/bannerwidget.cpp
@@ -217,8 +224,8 @@ if(BUILD_TESTING)
     add_executable(tst_buildrecommendation
         tests/tst_buildrecommendation.cpp
         src/builddialog.cpp src/bannerwidget.cpp
-        src/recommendation.cpp src/dwarfsctljob.cpp src/dwarfsctlrunner.cpp
-        src/dwarfsctljson.cpp src/warnings.cpp src/logging.cpp)
+        src/recommendation.cpp src/dwarfsctljob.cpp ../common/dwarfsctlrunner.cpp
+        src/dwarfsctljson.cpp  src/logging.cpp)
     target_include_directories(tst_buildrecommendation PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/../common)
     target_link_libraries(tst_buildrecommendation PRIVATE
@@ -232,8 +239,9 @@ endif()
 
 target_sources(dwarfsfileitemactionplugin PRIVATE src/buildfeedback.cpp src/buildfeedback.h)
 if(BUILD_TESTING)
-    add_executable(tst_buildfeedback tests/tst_buildfeedback.cpp src/buildfeedback.cpp)
-    target_include_directories(tst_buildfeedback PRIVATE src)
+    add_executable(tst_buildfeedback tests/tst_buildfeedback.cpp src/buildfeedback.cpp
+        src/detailsdialog.cpp src/detailsdialog.h ../common/operationstatus.cpp)
+    target_include_directories(tst_buildfeedback PRIVATE src ../common)
     target_link_libraries(tst_buildfeedback PRIVATE Qt6::Widgets Qt6::Test KF6::I18n)
     add_test(NAME tst_buildfeedback COMMAND tst_buildfeedback)
     set_tests_properties(tst_buildfeedback PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -269,12 +277,85 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(tst_dwarfsctljob tests/tst_dwarfsctljob.cpp
-        src/dwarfsctljob.cpp src/dwarfsctlrunner.cpp src/dwarfsctljson.cpp src/logging.cpp)
+        src/dwarfsctljob.cpp ../common/dwarfsctlrunner.cpp src/dwarfsctljson.cpp src/logging.cpp)
     target_include_directories(tst_dwarfsctljob PRIVATE src ../common)
     target_link_libraries(tst_dwarfsctljob PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus
         Qt6::Test KF6::CoreAddons KF6::I18n KF6::JobWidgets KF6::KIOWidgets)
     target_compile_definitions(tst_dwarfsctljob PRIVATE QT_NO_KEYWORDS)
     add_test(NAME tst_dwarfsctljob COMMAND tst_dwarfsctljob)
     set_tests_properties(tst_dwarfsctljob PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 40)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_operationdialogs tests/tst_operationdialogs.cpp
+        src/integritycheckdialog.cpp src/checksumdialog.cpp src/detailsdialog.cpp src/bannerwidget.cpp
+        src/dwarfsctljob.cpp ../common/dwarfsctlrunner.cpp src/dwarfsctljson.cpp src/logging.cpp
+        ../common/operationstatus.cpp)
+    target_include_directories(tst_operationdialogs PRIVATE src ../common)
+    target_link_libraries(tst_operationdialogs PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus Qt6::Test
+        KF6::CoreAddons KF6::I18n KF6::JobWidgets KF6::WidgetsAddons)
+    target_compile_definitions(tst_operationdialogs PRIVATE QT_NO_KEYWORDS)
+    add_test(NAME tst_operationdialogs COMMAND tst_operationdialogs)
+    set_tests_properties(tst_operationdialogs PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+    find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session REQUIRED)
+    add_executable(tst_trayagentjob tests/tst_trayagentjob.cpp
+        src/trayagentjob.cpp src/dwarfsctljson.cpp)
+    target_include_directories(tst_trayagentjob PRIVATE src)
+    target_link_libraries(tst_trayagentjob PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus Qt6::Test
+        KF6::CoreAddons KF6::I18n)
+    target_compile_definitions(tst_trayagentjob PRIVATE QT_NO_KEYWORDS)
+    add_test(NAME tst_trayagentjob COMMAND ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:tst_trayagentjob>)
+    set_tests_properties(tst_trayagentjob PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DWARFSCTL_TEST_PRIVATE_BUS=1" TIMEOUT 30)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_mountscache tests/tst_mountscache.cpp src/mountscache.cpp src/logging.cpp)
+    target_include_directories(tst_mountscache PRIVATE src ../common)
+    target_link_libraries(tst_mountscache PRIVATE Qt6::Core Qt6::DBus Qt6::Test)
+    target_compile_definitions(tst_mountscache PRIVATE QT_NO_KEYWORDS)
+    set(CACHE_TEST_HOME "${CMAKE_CURRENT_BINARY_DIR}/cache-test-home")
+    file(MAKE_DIRECTORY "${CACHE_TEST_HOME}" "${CACHE_TEST_HOME}/runtime")
+    file(CHMOD "${CACHE_TEST_HOME}" "${CACHE_TEST_HOME}/runtime"
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+    add_test(NAME tst_mountscache COMMAND ${CMAKE_COMMAND} -E env
+        "HOME=${CACHE_TEST_HOME}" "XDG_CONFIG_HOME=${CACHE_TEST_HOME}/config"
+        "XDG_DATA_HOME=${CACHE_TEST_HOME}/data" "XDG_CACHE_HOME=${CACHE_TEST_HOME}/cache"
+        "XDG_STATE_HOME=${CACHE_TEST_HOME}/state" "XDG_RUNTIME_DIR=${CACHE_TEST_HOME}/runtime"
+        ${DBUS_RUN_SESSION_EXECUTABLE} -- $<TARGET_FILE:tst_mountscache>)
+    set_tests_properties(tst_mountscache PROPERTIES
+        ENVIRONMENT "DWARFSCTL_TEST_PRIVATE_BUS=1" TIMEOUT 30)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_backenddiscovery tests/tst_backenddiscovery.cpp)
+    target_include_directories(tst_backenddiscovery PRIVATE ../common)
+    target_link_libraries(tst_backenddiscovery PRIVATE Qt6::Core Qt6::Test)
+    add_test(NAME tst_backenddiscovery COMMAND tst_backenddiscovery)
+    set_tests_properties(tst_backenddiscovery PROPERTIES TIMEOUT 15)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_actionrecovery tests/tst_actionrecovery.cpp)
+    target_link_libraries(tst_actionrecovery PRIVATE Qt6::Widgets Qt6::Test KF6::KIOWidgets KF6::CoreAddons)
+    target_compile_definitions(tst_actionrecovery PRIVATE DWARFSCTL_ACTION_PLUGIN="$<TARGET_FILE:dwarfsfileitemactionplugin>")
+    add_dependencies(tst_actionrecovery dwarfsfileitemactionplugin)
+    add_test(NAME tst_actionrecovery COMMAND tst_actionrecovery)
+    set_tests_properties(tst_actionrecovery PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dwarfsctl-absent-test-bus;XDG_DATA_HOME=${TEST_XDG_DATA_HOME}"
+        TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(tst_backendquery tests/tst_backendquery.cpp
+        src/dwarfsctljob.cpp ../common/dwarfsctlrunner.cpp src/dwarfsctljson.cpp src/logging.cpp)
+    target_include_directories(tst_backendquery PRIVATE src ../common)
+    target_link_libraries(tst_backendquery PRIVATE Qt6::Core Qt6::Widgets Qt6::DBus Qt6::Test
+        KF6::CoreAddons KF6::I18n KF6::JobWidgets KF6::KIOWidgets)
+    target_compile_definitions(tst_backendquery PRIVATE QT_NO_KEYWORDS)
+    add_test(NAME tst_backendquery COMMAND tst_backendquery)
+    set_tests_properties(tst_backendquery PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
 endif()

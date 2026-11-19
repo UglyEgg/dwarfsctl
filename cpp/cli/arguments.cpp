@@ -10,14 +10,14 @@ static const std::map<std::string, CommandSpec> commands{
     {"build",
      {1,
       1,
-      {"output", "compression", "mkdwarfs-arg"},
-      {"force", "overwrite-output", "yes", "dry-run"},
+      {"output", "compression", "mkdwarfs-arg", "preview-stage", "publish-preview", "expected-size"},
+      {"force", "overwrite-output", "yes", "dry-run", "preview"},
       {"mkdwarfs-arg"}}},
     {"ls", {1, 1, {"path"}, {"children-only", "entry-only"}, {}}},
     {"cat", {3, 3, {}, {"force"}, {}}},
     {"peek", {1, 1, {}, {}, {}}},
     {"usage", {1, 1, {}, {}, {}}},
-    {"extract", {2, 2, {"arg"}, {}, {"arg"}}},
+    {"extract", {2, 2, {"arg", "path"}, {}, {"arg", "path"}}},
     {"fsck", {1, 1, {"arg"}, {}, {"arg"}}},
     {"doctor", {0, 0, {}, {}, {}}},
     {"status", {0, 1, {}, {}, {}}},
@@ -135,10 +135,21 @@ Input parse(QStringList const &raw) {
   if (in.positions.size() < static_cast<size_t>(spec.min) ||
       in.positions.size() > static_cast<size_t>(spec.max))
     throw Error(2, "wrong number of arguments for " + in.command);
+  if (in.command == "extract" && in.has("path") && in.has("arg"))
+    throw Error(2, "--path cannot be combined with --arg");
   if (in.command == "config set" && in.positions.size() % 2 != 0)
     throw Error(2, "config set requires KEY VALUE pairs");
   if (in.command == "build" && !in.has("output"))
     throw Error(2, "--output is required");
+  if (in.command == "build" && in.has("preview") && in.has("dry-run"))
+    throw Error(2, "--preview cannot be combined with --dry-run");
+  if (in.command == "build" && in.has("preview-stage") && !in.has("preview"))
+    throw Error(2, "--preview-stage requires --preview");
+  if (in.command == "build" && in.has("publish-preview") &&
+      (in.has("preview") || in.has("dry-run") || !in.has("expected-size")))
+    throw Error(2, "--publish-preview requires --expected-size and cannot be combined with preview or dry-run");
+  if (in.command == "build" && in.has("expected-size") && !in.has("publish-preview"))
+    throw Error(2, "--expected-size requires --publish-preview");
   if (in.command.starts_with("checksum") && !in.has("algo"))
     throw Error(2, "--algo is required");
   if (in.command == "checksum verify" && !in.has("input"))
