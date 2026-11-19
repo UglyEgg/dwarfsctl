@@ -34,6 +34,11 @@
 #include <QPixmap>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QThread>
+#include <QDBusContext>
+#include <QDBusMessage>
+#include <functional>
+#include <memory>
 
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -49,7 +54,10 @@
 #include "dwarfsctl_exec.h"
 
 #include "aboutdialog.h"
+#include "backendquery.h"
 #include "mount_executor.h"
+#include "directmountoperation.h"
+#include "imagemenuentry.h"
 #include "mount_liveness.h"
 #include "placesmanager.h"
 #include "settingsdialog.h"
@@ -57,36 +65,16 @@
 #include "traysettings.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
+#include <cerrno>
 
 using dwarfsctl_kde::dwarfsctlExe;
 
 struct MountRecord {
     QString image;
     QString mountpoint;
+    QString icon;
 };
-
-static QProcessEnvironment dwarfsctlProcEnv();
-
-static QString dwarfsctlVersionString()
-{
-    QProcess p;
-    p.setProcessEnvironment(dwarfsctlProcEnv());
-    p.start(dwarfsctlExe(), {QStringLiteral("--version")});
-    if (!p.waitForFinished(1500)) {
-        p.kill();
-        p.waitForFinished();
-        return QStringLiteral("(unknown)");
-    }
-
-    QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-    if (out.isEmpty()) {
-        out = QString::fromUtf8(p.readAllStandardError()).trimmed();
-    }
-    if (out.isEmpty()) {
-        return QStringLiteral("(unknown)");
-    }
-    return out.section(QLatin1Char('\n'), 0, 0).trimmed();
-}
 
 static void showAboutDialog(QWidget* parent)
 {
@@ -109,29 +97,16 @@ static QString registryPath()
     return QDir(run + "/dwarfsctl").filePath("mounts.json");
 }
 
-static QStringList dwarfsctlJsonArgs(const QStringList& tail)
+// The registry is a small local runtime file. Observe only its identity;
+// lock-file churn in its parent directory is not a registry update.
+static QByteArray registryFileIdentity(const QString &path)
 {
-    QStringList args;
-    args;
-    args << tail;
-    return args;
-}
-
-static QProcessEnvironment dwarfsctlProcEnv()
-{
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    // Ensure dwarfsctl uses the per-session registry under the runtime directory.
-    const QString reg = registryPath();
-    const QString dwarfsctlDir = QFileInfo(reg).dir().absolutePath();
-    const QString runtimeDir = QFileInfo(dwarfsctlDir).dir().absolutePath();
-    if (!runtimeDir.isEmpty()) {
-        env.insert(QStringLiteral("XDG_RUNTIME_DIR"), runtimeDir);
-    }
-
-    // Prevent recursion after the CLI becomes a strict D-Bus client. The tray
-    // is the mount authority and may still shell out to dwarfsctl for local
-    // operations.
-    return env;
+    struct stat value {};
+    if (::lstat(QFile::encodeName(path).constData(), &value) != 0) return {};
+    return QByteArray::number(value.st_dev) + ':' + QByteArray::number(value.st_ino) + ':'
+        + QByteArray::number(value.st_size) + ':' + QByteArray::number(value.st_mtim.tv_sec) + ':'
+        + QByteArray::number(value.st_mtim.tv_nsec) + ':' + QByteArray::number(value.st_ctim.tv_sec) + ':'
+        + QByteArray::number(value.st_ctim.tv_nsec);
 }
 
 static constexpr const char* kTrayDbusService = "org.quest.entropy.dwarfsctl.Tray";
@@ -141,7 +116,7 @@ static constexpr const char* kTrayDbusInterface = "org.quest.entropy.dwarfsctl.T
 static constexpr const char* kMountsDbusPath = "/org/quest/entropy/dwarfsctl/Mounts";
 static constexpr const char* kMountsDbusInterface = "org.quest.entropy.dwarfsctl.Mounts1";
 
-class TrayDbus final : public QObject {
+class TrayDbus final : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.quest.entropy.dwarfsctl.Tray")
 
@@ -154,8 +129,16 @@ public:
 public slots:
     QString Ping()
     {
-        // Return something stable and useful for debugging.
-        return dwarfsctlVersionString();
+        if (!calledFromDBus()) return QStringLiteral("(unknown)");
+        const auto request = message();
+        const auto bus = connection();
+        setDelayedReply(true);
+        dwarfsplugin::BackendQuery::text(this, {QStringLiteral("--version")},
+            [request, bus](const dwarfsplugin::BackendReply &reply) {
+            const auto version = reply.text.trimmed().section(QLatin1Char('\n'), 0, 0).trimmed();
+            bus.send(request.createReply(reply.ok && !version.isEmpty() ? version : QStringLiteral("(unknown)")));
+        });
+        return {};
     }
 
     void ShowAbout()
@@ -169,18 +152,16 @@ class MountsDbus;
 class TrayController final : public QObject, public IMountBackend {
     Q_OBJECT
 
-    // MountsDbus exposes a small D-Bus surface that delegates to the internal
-    // MountExecutor. Keep the executor accessor protected for normal code,
-    // but allow the D-Bus adaptor to call into it.
+    // D-Bus and GUI requests share the controller's single admission gate.
     friend class MountsDbus;
 
 public:
     explicit TrayController(QObject* parent = nullptr)
         : QObject(parent)
-        , m_exec(this)
         , m_item(new KStatusNotifierItem(this))
         , m_menu(new QMenu())
         , m_watch(new KDirWatch(this))
+        , m_directOperation(new dwarfsctl_tray::DirectMountOperation(this))
     {
         m_item->setCategory(KStatusNotifierItem::SystemServices);
         m_item->setStatus(KStatusNotifierItem::Active);
@@ -189,6 +170,7 @@ public:
         // managers. With one active volume, activation performs the obvious
         // action directly; otherwise it opens the same menu as a context click.
         connect(m_item, &KStatusNotifierItem::activateRequested, this, [this](bool /*active*/, const QPoint& pos) {
+            if (m_directOperation->isActive()) { m_directOperation->showCurrent(); return; }
             refresh();
             if (m_mounts.size() == 1) {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(m_mounts.constFirst().mountpoint));
@@ -212,12 +194,35 @@ public:
         m_watch->addFile(reg);
         // Also watch the parent dir so creation/rotation is detected reliably.
         m_watch->addDir(QFileInfo(reg).dir().absolutePath(), KDirWatch::WatchFiles);
-        connect(m_watch, &KDirWatch::dirty, this, &TrayController::refresh);
-        connect(m_watch, &KDirWatch::created, this, &TrayController::refresh);
-        connect(m_watch, &KDirWatch::deleted, this, &TrayController::refresh);
+        m_registryIdentity = registryFileIdentity(reg);
+        // Both file events and generic parent-directory events can report
+        // creation/rotation. Only changed registry identity requests refresh.
+        const auto registryChanged = [this, reg](const QString &) {
+            const auto identity = registryFileIdentity(reg);
+            if (identity == m_registryIdentity) return;
+            m_registryIdentity = identity;
+            refresh();
+        };
+        connect(m_watch, &KDirWatch::dirty, this, registryChanged);
+        connect(m_watch, &KDirWatch::created, this, registryChanged);
+        connect(m_watch, &KDirWatch::deleted, this, registryChanged);
+
+        connect(m_directOperation, &dwarfsctl_tray::DirectMountOperation::finished, this,
+                [this](const QByteArray &result) {
+            m_authorityBusy = false;
+            runMountAgent(result, false);
+            rebuildMenu();
+        });
 
         // Initial state.
         QTimer::singleShot(0, this, &TrayController::refresh);
+    }
+
+    ~TrayController() override
+    {
+        // Finish owned work before destroying controller state. Completion
+        // callbacks are context-bound and cannot run after destruction.
+        if (m_worker) { m_worker->wait(); delete m_worker; }
     }
 
 protected:
@@ -248,19 +253,67 @@ protected:
         return QString::fromUtf8(QJsonDocument(a).toJson(QJsonDocument::Compact));
     }
 
-    MountExecutor* executor()
-    {
-        return &m_exec;
-    }
-
 signals:
     void mountsChangedJson(const QString& mountsJson);
 
 private slots:
     void refresh()
     {
+        if (m_authorityBusy) { m_refreshPending = true; return; }
+        m_refreshPending = false;
+        dispatch([] {
+            auto envelope = QJsonDocument::fromJson(MountExecutor(nullptr).listMounts()).object();
+            const auto resolve = [](const QString &path) {
+                if (path.isEmpty() || path.contains(QChar::Null)) return QString{};
+                const auto canonical = dwarfsctl_tray::boundedCanonicalFilePath(path);
+                return canonical.isEmpty() ? QDir::cleanPath(QFileInfo(path).absoluteFilePath()) : canonical;
+            };
+            const auto images = dwarfsctl_kde::recentImages(resolve);
+            QJsonObject available;
+            for (const auto &image : images) {
+                struct stat source {};
+                int error = 0;
+                const bool exists = dwarfsctl_tray::boundedFileStat(image, &source, &error);
+                // Unknown availability stays actionable; the executor reports
+                // a bounded failure if mounting cannot establish the source.
+                available.insert(image, exists ? QJsonValue(S_ISREG(source.st_mode))
+                    : error == ENOENT || error == ENOTDIR ? QJsonValue(false) : QJsonValue(QJsonValue::Null));
+            }
+            QJsonObject icons;
+            for (const auto &row : envelope.value(QStringLiteral("details")).toObject().value(QStringLiteral("mounts")).toArray()) {
+                const auto mount = row.toObject();
+                const auto image = mount.value(QStringLiteral("image")).toString();
+                icons.insert(mount.value(QStringLiteral("mountpoint")).toString(), dwarfsctl_tray::placesIconForImage(image));
+            }
+            envelope.insert(QStringLiteral("places_icons"), icons);
+            envelope.insert(QStringLiteral("recent_images"), QJsonArray::fromStringList(images));
+            envelope.insert(QStringLiteral("recent_limit"), dwarfsctl_kde::recentImageLimit(resolve));
+            envelope.insert(QStringLiteral("recent_available"), available);
+            return QJsonDocument(envelope).toJson();
+        }, [this](const QByteArray &raw) {
+            const auto envelope = QJsonDocument::fromJson(raw).object();
+            m_recentImages.clear();
+            for (const auto &image : envelope.value(QStringLiteral("recent_images")).toArray()) m_recentImages.append(image.toString());
+            m_recentLimit = envelope.value(QStringLiteral("recent_limit")).toInt(5);
+            m_recentAvailable.clear();
+            const auto available = envelope.value(QStringLiteral("recent_available")).toObject();
+            for (auto it = available.begin(); it != available.end(); ++it)
+                if (it.value().isBool()) m_recentAvailable.insert(it.key(), it.value().toBool());
+            if (!envelope.value(QStringLiteral("ok")).toBool()) return;
+            QList<MountRecord> mounts;
+            for (const auto &entry : envelope.value(QStringLiteral("details")).toObject().value(QStringLiteral("mounts")).toArray()) {
+                const auto row = entry.toObject();
+                mounts.append({row.value(QStringLiteral("image")).toString(), row.value(QStringLiteral("mountpoint")).toString(),
+                    envelope.value(QStringLiteral("places_icons")).toObject().value(row.value(QStringLiteral("mountpoint")).toString()).toString()});
+            }
+            applyMounts(mounts);
+        });
+    }
+
+    void applyMounts(const QList<MountRecord> &mounts)
+    {
         const QList<MountRecord> before = m_mounts;
-        m_mounts = fetchMounts();
+        m_mounts = mounts;
         updateIcon();
 
         QHash<QString, QString> beforeByMountpoint;
@@ -283,7 +336,9 @@ private slots:
         for (auto it = afterByMountpoint.cbegin(); it != afterByMountpoint.cend(); ++it) {
             if (!beforeByMountpoint.contains(it.key())
                 || beforeByMountpoint.value(it.key()) != it.value()) {
-                dwarfsctl_tray::syncPlacesEntry(true, it.value(), it.key());
+                QString icon;
+                for (const auto &record : m_mounts) if (record.mountpoint == it.key()) { icon = record.icon; break; }
+                dwarfsctl_tray::syncPlacesEntry(true, it.value(), it.key(), icon);
             }
         }
 
@@ -310,6 +365,14 @@ private slots:
                 .replace(QLatin1Char('&'), QStringLiteral("&&"));
         };
 
+        const QStringList images = m_recentImages;
+        QStringList peers = images;
+        for (const auto &record : m_mounts)
+            if (!peers.contains(record.image)) peers.append(record.image);
+        const auto tooltip = [](const QString &text) {
+            return QStringLiteral("<qt>%1</qt>").arg(text.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br/>")));
+        };
+
         if (m_mounts.isEmpty()) {
             auto* none = m_menu->addAction(tr("No mounted DwarFS volumes"));
             none->setEnabled(false);
@@ -317,12 +380,8 @@ private slots:
             auto* mountedMenu = m_menu->addMenu(tr("Mounted Volumes"));
             mountedMenu->setToolTipsVisible(true);
             for (const auto& r : m_mounts) {
-                const QFileInfo fi(r.image);
-                QString label = fi.completeBaseName();
-                if (label.isEmpty())
-                    label = fi.fileName();
-                auto* volume = mountedMenu->addMenu(menuLabel(label));
-                volume->menuAction()->setToolTip(r.image);
+                auto* volume = mountedMenu->addMenu(menuLabel(dwarfsctl_tray::imageMenuLabel(r.image, peers)));
+                volume->menuAction()->setToolTip(tooltip(r.image));
 
                 auto* open = volume->addAction(tr("Open in Dolphin"));
                 connect(open, &QAction::triggered, this, [mp = r.mountpoint]() {
@@ -330,18 +389,20 @@ private slots:
                 });
 
                 auto* unmount = volume->addAction(tr("Unmount"));
+                unmount->setEnabled(!m_directOperation->isActive());
                 connect(unmount, &QAction::triggered, this, [this, mp = r.mountpoint]() {
-                    const auto before = mountpointSet();
-                    runMountAgent(m_exec.unmountByMountpoint(mp), true, before);
+                    startDirectOperation(tr("Unmount Volume"), tr("Unmounting volume…"), tr("Volume unmounted."),
+                        [mp] { MountExecutor executor(nullptr); return executor.unmountByMountpoint(mp); });
                 });
             }
 
             if (m_mounts.size() > 1) {
                 mountedMenu->addSeparator();
                 auto* unmountAll = mountedMenu->addAction(tr("Unmount All"));
+                unmountAll->setEnabled(!m_directOperation->isActive());
                 connect(unmountAll, &QAction::triggered, this, [this]() {
-                    const auto before = mountpointSet();
-                    runMountAgent(m_exec.unmountAll(), true, before);
+                    startDirectOperation(tr("Unmount All Volumes"), tr("Unmounting volumes…"), tr("Volumes unmounted."),
+                        [] { MountExecutor executor(nullptr); return executor.unmountAll(); });
                 });
             }
         }
@@ -349,19 +410,11 @@ private slots:
         m_menu->addSeparator();
 
         auto* utility = m_menu->addAction(tr("Open DwarFS Utility…"));
-        connect(utility, &QAction::triggered, this, [this]() {
-            if (!QProcess::startDetached(QStringLiteral("dwarfsctl-manager"), QStringList{})) {
-                m_item->showMessage(tr("Could Not Open DwarFS Utility"),
-                                    tr("The application could not be started."),
-                                    QStringLiteral("dialog-error"), 5000);
-            }
-        });
+        connect(utility, &QAction::triggered, this, [this]() { openUtility(); });
 
-        // Recently mounted images (MRU list).
+        // Shared image history is refreshed each time this menu opens.
         auto* recentMenu = m_menu->addMenu(tr("Recent Images"));
-        const int limit = dwarfsctl_tray::recentlyMountedLimit();
-        const QStringList images = dwarfsctl_tray::recentlyMountedImages();
-
+        const int limit = m_recentLimit;
         recentMenu->setEnabled(limit > 0);
         recentMenu->setToolTipsVisible(true);
         if (limit <= 0) {
@@ -373,19 +426,48 @@ private slots:
                 empty->setEnabled(false);
             } else {
                 for (const auto& img : images) {
-                    auto* a = recentMenu->addAction(menuLabel(dwarfsctl_tray::recentLabelForImage(img)));
-                    a->setToolTip(img);
-                    connect(a, &QAction::triggered, this, [this, img]() {
-                        const auto before = mountpointSet();
-                        runMountAgent(m_exec.mount(img), true, before);
+                    QString mountpoint;
+                    const QString identity = QDir::cleanPath(img);
+                    for (const auto &record : m_mounts) {
+                        if (QDir::cleanPath(record.image) == identity) {
+                            mountpoint = record.mountpoint;
+                            break;
+                        }
+                    }
+                    const auto entry = dwarfsctl_tray::recentImageMenuEntry(img, peers, mountpoint,
+                        m_recentAvailable.value(img, true));
+                    auto* a = recentMenu->addAction(menuLabel(entry.label));
+                    a->setToolTip(tooltip(entry.tooltip));
+                    a->setEnabled(!m_directOperation->isActive());
+                    connect(a, &QAction::triggered, this, [this, img, entry]() {
+                        if (entry.action == dwarfsctl_tray::ImageMenuAction::OpenMountedFolder) {
+                            QDesktopServices::openUrl(QUrl::fromLocalFile(entry.target));
+                        } else if (entry.action == dwarfsctl_tray::ImageMenuAction::LocateInUtility) {
+                            openUtility(img);
+                        } else {
+                            startDirectOperation(tr("Mount Image"), tr("Mounting %1…").arg(QFileInfo(img).fileName()), tr("Image mounted."),
+                                [img] { MountExecutor executor(nullptr); return executor.mount(img); });
+                        }
                     });
                 }
             }
 
             recentMenu->addSeparator();
-            auto* clear = recentMenu->addAction(tr("Clear Recent Images"));
+            auto* clear = recentMenu->addAction(tr("Clear Recent Image History"));
+            clear->setToolTip(tr("Remove saved image paths from Utility and tray history. Image files and mounted volumes are kept."));
             clear->setEnabled(!images.isEmpty());
-            connect(clear, &QAction::triggered, this, []() { dwarfsctl_tray::clearRecentlyMountedImages(); });
+            connect(clear, &QAction::triggered, this, [this]() {
+                if (!dispatch([] {
+                    return QJsonDocument(QJsonObject{{QStringLiteral("ok"), dwarfsctl_tray::clearRecentlyMountedImages()}}).toJson();
+                }, [this](const QByteArray &raw) {
+                    if (!QJsonDocument::fromJson(raw).object().value(QStringLiteral("ok")).toBool())
+                        m_item->showMessage(tr("Could Not Clear Recent Images"),
+                            tr("The image history could not be fully cleared. Check that preferences are available, then try again."),
+                            QStringLiteral("dialog-error"), 5000);
+                    refresh();
+                })) m_item->showMessage(tr("DwarFSctl"), tr("The mount state is being checked. Try again shortly."),
+                    QStringLiteral("dialog-information"), 3000);
+            });
         }
 
         m_menu->addSeparator();
@@ -399,141 +481,78 @@ private slots:
         auto* about = m_menu->addAction(tr("About DwarFSctl"));
         connect(about, &QAction::triggered, this, [this]() { showAboutDialog(m_menu); });
 
+        if (m_directOperation->isActive()) {
+            auto *current = m_menu->addAction(tr("Show Current Operation…"));
+            connect(current, &QAction::triggered, m_directOperation, &dwarfsctl_tray::DirectMountOperation::showCurrent);
+        }
         auto* quit = m_menu->addAction(tr("Quit"));
+        quit->setEnabled(!m_directOperation->isActive());
         connect(quit, &QAction::triggered, qApp, &QCoreApplication::quit);
     }
 
 private:
-    QList<MountRecord> fetchMounts()
+    void openUtility(const QString &image = {})
     {
-        QList<MountRecord> out;
-
-        QFile f(registryPath());
-        if (!f.exists()) {
-            return out;
+        const QStringList arguments = image.isEmpty() ? QStringList{} : QStringList{image};
+        if (!QProcess::startDetached(QStringLiteral("dwarfsctl-manager"), arguments)) {
+            m_item->showMessage(tr("Could Not Open DwarFS Utility"),
+                tr("The application could not be started."), QStringLiteral("dialog-error"), 5000);
         }
-        if (!f.open(QIODevice::ReadOnly)) {
-            return out;
-        }
-        const QByteArray raw = f.readAll();
-        f.close();
-
-        QJsonParseError perr {};
-        const QJsonDocument doc = QJsonDocument::fromJson(raw, &perr);
-        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-            return out;
-        }
-
-        const QJsonObject root = doc.object();
-        const QJsonValue mountsV = root.value(QStringLiteral("mounts"));
-        if (!mountsV.isArray()) {
-            return out;
-        }
-
-        const QJsonArray mountsA = mountsV.toArray();
-        for (const auto& v : mountsA) {
-            if (!v.isObject()) {
-                continue;
-            }
-            const QJsonObject o = v.toObject();
-            MountRecord r;
-            r.image = o.value(QStringLiteral("image")).toString();
-            r.mountpoint = o.value(QStringLiteral("mountpoint")).toString();
-            if (!r.image.isEmpty() && !r.mountpoint.isEmpty()) {
-                // Keep only entries that are genuinely usable. Existence alone
-                // cannot decide this: a dead FUSE daemon leaves the path in the
-                // mount table and in the attribute cache, so the tray would show
-                // a mounted icon for a mountpoint that serves nothing.
-                if (dwarfsctl_tray::mountsUsable(r.mountpoint)) {
-                    out.push_back(r);
-                }
-            }
-        }
-
-        return out;
     }
 
-    QByteArray runDwarfsctl(const QStringList& tail, bool notify)
+    void startDirectOperation(const QString &title, const QString &running, const QString &success,
+                              dwarfsctl_tray::DirectMountOperation::Work work)
     {
-        const QSet<QString> before = [&]() {
-            QSet<QString> s;
-            for (const auto& r : m_mounts) {
-                s.insert(r.mountpoint);
-            }
-            return s;
-        }();
-
-        QProcess p;
-        p.setProcessEnvironment(dwarfsctlProcEnv());
-        p.start(dwarfsctlExe(), dwarfsctlJsonArgs(tail));
-        p.waitForFinished(-1);
-
-        const QByteArray rawOut = p.readAllStandardOutput();
-        const QByteArray rawErr = p.readAllStandardError();
-        const bool okExit = (p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0);
-
-        QString msg;
-        bool okEnvelope = false;
-        if (!rawOut.isEmpty()) {
-            QJsonParseError perr {};
-            const QJsonDocument doc = QJsonDocument::fromJson(rawOut, &perr);
-            if (perr.error == QJsonParseError::NoError && doc.isObject()) {
-                const QJsonObject root = doc.object();
-                okEnvelope = root.value("ok").toBool();
-                if (!okEnvelope) {
-                    const QJsonValue errV = root.value("error");
-                    if (errV.isObject()) {
-                        msg = errV.toObject().value("message").toString();
-                    }
-                    if (msg.isEmpty()) {
-                        msg = tr("Operation failed");
-                    }
-                }
-            }
+        if (m_directOperation->isActive()) { m_directOperation->showCurrent(); return; }
+        if (m_authorityBusy) {
+            m_item->showMessage(tr("DwarFSctl"), tr("The mount state is being checked. Try again shortly."), QStringLiteral("dialog-information"), 3000);
+            return;
         }
-
-        if (!okExit && msg.isEmpty()) {
-            msg = QString::fromUtf8(rawErr).trimmed();
-            if (msg.isEmpty()) {
-                msg = tr("Operation failed");
-            }
-        }
-
-        if (!msg.isEmpty()) {
-            if (notify) {
-                m_item->showMessage(tr("DwarFSctl"), msg, QStringLiteral("dialog-error"), 5000);
-            }
-        }
-
-        // Refresh state first.
-        refresh();
-
-        // If the command succeeded, remove Places entries that no longer correspond
-        // to an active mount.
-        if (okExit && okEnvelope) {
-            QSet<QString> after;
-            for (const auto& r : m_mounts) {
-                after.insert(r.mountpoint);
-            }
-            const auto removed = before - after;
-            for (const auto& mp : removed) {
-                dwarfsctl_tray::removePlacesEntryForMountpoint(mp);
-            }
-        }
-
-        return rawOut;
+        m_authorityBusy = true;
+        if (m_directOperation->start(title, running, success, std::move(work))) rebuildMenu();
+        else m_authorityBusy = false;
     }
 
-    QSet<QString> mountpointSet() const
+    QString executorBusyReply(const QString &command, const QString &image = {}) const
     {
-        QSet<QString> s;
-        for (const auto& r : m_mounts) {
-            s.insert(r.mountpoint);
-        }
-        return s;
+        return QString::fromUtf8(QJsonDocument(QJsonObject{
+            {QStringLiteral("ok"), false}, {QStringLiteral("command"), command},
+            {QStringLiteral("image"), image}, {QStringLiteral("details"), QJsonObject{}},
+            {QStringLiteral("warnings"), QJsonArray{}}, {QStringLiteral("warning_objects"), QJsonArray{}},
+            {QStringLiteral("error"), QJsonObject{{QStringLiteral("code"), 1}, {QStringLiteral("kind"), QStringLiteral("Busy")},
+                {QStringLiteral("message"), tr("A mount operation is already running. Wait for it to finish, then refresh the mount state.")}}}
+        }).toJson(QJsonDocument::Compact));
     }
 
-    QByteArray runMountAgent(const QByteArray& rawOut, bool notify, const QSet<QString>& before)
+    // Admission is owned by the GUI thread. All filesystem and process work,
+    // including refresh, shares this one slot; repeated refresh requests coalesce.
+    bool dispatch(dwarfsctl_tray::DirectMountOperation::Work work,
+                  std::function<void(const QByteArray &)> completed)
+    {
+        if (m_authorityBusy) return false;
+        m_authorityBusy = true;
+        auto result = std::make_shared<QByteArray>();
+        m_worker = QThread::create([work = std::move(work), result] {
+            try { *result = work(); }
+            catch (...) {
+                *result = QJsonDocument(QJsonObject{{QStringLiteral("ok"), false},
+                    {QStringLiteral("error"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("MountState")},
+                        {QStringLiteral("message"), QStringLiteral("The mount operation could not be completed.")}}}}).toJson();
+            }
+        });
+        connect(m_worker, &QThread::finished, this, [this, result, completed = std::move(completed)] {
+            m_worker->wait();
+            m_worker->deleteLater();
+            m_worker = nullptr;
+            m_authorityBusy = false;
+            completed(*result);
+            if (m_refreshPending) QTimer::singleShot(0, this, &TrayController::refresh);
+        });
+        m_worker->start();
+        return true;
+    }
+
+    QByteArray runMountAgent(const QByteArray& rawOut, bool notify)
     {
         QString msg;
         bool okEnvelope = false;
@@ -562,18 +581,6 @@ private:
         // Refresh state first.
         refresh();
 
-        // If the command succeeded, remove Places entries that no longer correspond
-        // to an active mount.
-        if (okEnvelope) {
-            QSet<QString> after;
-            for (const auto& r : m_mounts) {
-                after.insert(r.mountpoint);
-            }
-            const auto removed = before - after;
-            for (const auto& mp : removed) {
-                dwarfsctl_tray::removePlacesEntryForMountpoint(mp);
-            }
-        }
         return rawOut;
     }
 
@@ -607,14 +614,21 @@ private:
         m_item->setOverlayIconByPixmap(QIcon());
     }
 
-    MountExecutor m_exec;
+    QByteArray m_registryIdentity;
+    QStringList m_recentImages;
+    int m_recentLimit = 5;
+    QHash<QString, bool> m_recentAvailable;
+    QThread *m_worker = nullptr;
+    bool m_authorityBusy = false;
+    bool m_refreshPending = false;
     KStatusNotifierItem* m_item;
     QMenu* m_menu;
     KDirWatch* m_watch;
     QList<MountRecord> m_mounts;
+    dwarfsctl_tray::DirectMountOperation *m_directOperation;
 };
 
-class MountsDbus final : public QObject {
+class MountsDbus final : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.quest.entropy.dwarfsctl.Mounts1")
 
@@ -638,65 +652,70 @@ public slots:
 
     QString ListMounts()
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-
-        return QString::fromUtf8(m_ctl->executor()->listMounts());
+        return request(QStringLiteral("mount_list"), QString{},
+            [] { return MountExecutor(nullptr).listMounts(); });
     }
 
     QString Status(const QString& imagePath)
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->status(imagePath));
+        return request(QStringLiteral("mount_status"), imagePath,
+            [imagePath] { return MountExecutor(nullptr).status(imagePath); });
     }
 
     QString Mount(const QString& imagePath)
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->mount(imagePath));
+        return request(QStringLiteral("mount"), imagePath,
+            [imagePath] { return MountExecutor(nullptr).mount(imagePath); });
     }
 
     QString UnmountByMountpoint(const QString& mountpoint)
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->unmountByMountpoint(mountpoint));
+        return request(QStringLiteral("unmount"), QString{},
+            [mountpoint] { return MountExecutor(nullptr).unmountByMountpoint(mountpoint); });
     }
 
     QString UnmountByImage(const QString& imagePath)
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->unmountByImage(imagePath));
+        return request(QStringLiteral("unmount"), imagePath,
+            [imagePath] { return MountExecutor(nullptr).unmountByImage(imagePath); });
     }
 
     QString UnmountAll()
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->unmountAll());
+        return request(QStringLiteral("unmount_all"), QString{},
+            [] { return MountExecutor(nullptr).unmountAll(); });
     }
 
     QString UnmountLast()
     {
-        if (!m_ctl) {
-            return QStringLiteral("{}");
-        }
-        return QString::fromUtf8(m_ctl->executor()->unmountLast());
+        return request(QStringLiteral("unmount_last"), QString{},
+            [] { return MountExecutor(nullptr).unmountLast(); });
     }
+
 
 signals:
     void MountsChanged(const QString& mountsJson);
 
 private:
+    QString request(const QString &command, const QString &image,
+                    dwarfsctl_tray::DirectMountOperation::Work work)
+    {
+        if (!m_ctl) return QStringLiteral("{}");
+        if (m_ctl->m_authorityBusy) return m_ctl->executorBusyReply(command, image);
+        auto reply = message().createReply();
+        const auto bus = connection();
+        setDelayedReply(true);
+        m_ctl->dispatch(std::move(work), [this, bus, reply, command](const QByteArray &result) mutable {
+            reply.setArguments({QString::fromUtf8(result)});
+            bus.send(reply);
+            const auto envelope = QJsonDocument::fromJson(result).object();
+            const bool notDispatched = envelope.value(QStringLiteral("details")).toObject()
+                .value(QStringLiteral("reason")).toString() == QLatin1String("record_not_found");
+            if (command != QLatin1String("mount_list") && command != QLatin1String("mount_status") && !notDispatched)
+                m_ctl->refresh();
+        });
+        return {};
+    }
     TrayController* m_ctl = nullptr;
 };
 
@@ -707,6 +726,7 @@ int main(int argc, char** argv)
     KIconTheme::initTheme();
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("dwarfsctl-tray"));
+    app.setQuitOnLastWindowClosed(false);
     app.setApplicationDisplayName(QStringLiteral("DwarFSctl"));
     app.setOrganizationDomain(QStringLiteral("entropy.quest"));
     app.setDesktopFileName(QStringLiteral("dwarfsctl-tray"));

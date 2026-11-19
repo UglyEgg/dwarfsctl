@@ -250,6 +250,7 @@ bool ContentRingsWidget::setUsage(const QJsonObject &usage)
     return true;
 }
 
+bool ContentRingsWidget::hasUsage() const { return m_state == State::Ready; }
 quint64 ContentRingsWidget::totalBytes() const { return m_root.bytes; }
 int ContentRingsWidget::topLevelCount() const { return m_root.children.size(); }
 QSize ContentRingsWidget::sizeHint() const { return QSize(700, 410); }

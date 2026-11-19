@@ -33,8 +33,12 @@ DecodeResult decodeStatus(const Envelope &env, StatusDetails *out)
     }
 
     // mounted is optional in the public schema; only present when an image was provided.
+    out->mounted_present = false;
+    out->mounted = false;
+    const bool mountKnown = !env.details.contains(QStringLiteral("mount_state_known"))
+        || env.details.value(QStringLiteral("mount_state_known")).toBool();
     const QJsonValue mv = env.details.value(QStringLiteral("mounted"));
-    if (mv.isBool()) {
+    if (mountKnown && mv.isBool()) {
         out->mounted_present = true;
         out->mounted = mv.toBool();
     }
@@ -43,7 +47,7 @@ DecodeResult decodeStatus(const Envelope &env, StatusDetails *out)
     out->mount_health = env.details.value(QStringLiteral("mount_health")).toString();
     out->mount_fs_type = env.details.value(QStringLiteral("mount_fs_type")).toString();
     out->mount_source = env.details.value(QStringLiteral("mount_source")).toString();
-    if (out->mounted_present && !out->mounted) {
+    if (!out->mounted_present || !out->mounted) {
         // `status` also reports the path it would use under image.paths. A
         // non-mounted image must not present that derived path as an active
         // mountpoint.

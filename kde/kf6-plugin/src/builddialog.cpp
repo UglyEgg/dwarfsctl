@@ -6,110 +6,91 @@
 #include "bannerwidget.h"
 #include "dwarfsctljob.h"
 #include "dwarfsctljson.h"
-#include "dwarfsctlrunner.h"
+#include "backendquery.h"
 #include "logging.h"
 #include "recommendation.h"
-#include "warnings.h"
+#include "../../common/uipresentation.h"
 
 #include <KLocalizedString>
 
 #include <QCheckBox>
+#include <functional>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace dwarfsplugin {
 
 namespace {
 
-bool runDwarfsctlJson(const QStringList &args, Envelope *outEnv, QString *outErr)
+struct CreationDefaults {
+    QString mode;
+    QString profile;
+    QString goal;
+};
+
+bool parseCreationDefaults(const QJsonObject &details, CreationDefaults *out)
 {
-    const auto rr = DwarfsctlRunner::run(args, DwarfsctlRunner::defaultTimeoutMs());
-    if (rr.crashed) {
-        if (outErr)
-            *outErr = i18n("dwarfsctl did not respond");
-        return false;
-    }
-    const auto parsed = parseEnvelope(rr.stdout_bytes);
-    if (!parsed.parsed) {
-        if (outErr)
-            *outErr = i18n("The DwarFS service returned an invalid response.");
-        return false;
-    }
-    if (!parsed.envelope.ok) {
-        if (outErr)
-            *outErr = parsed.envelope.has_error ? parsed.envelope.error.message : i18n("The DwarFS operation failed.");
-        return false;
-    }
-    if (outEnv)
-        *outEnv = parsed.envelope;
+    const auto mode = details.value(QStringLiteral("default_mode"));
+    const auto profile = details.value(QStringLiteral("default_profile"));
+    const auto goal = details.value(QStringLiteral("recommendation_goal"));
+    if (!mode.isString() || !profile.isString() || !goal.isString()) return false;
+    if (mode == QJsonValue(QStringLiteral("profile")) && profile.toString().isEmpty()) return false;
+    if (mode != QJsonValue(QStringLiteral("profile")) && mode != QJsonValue(QStringLiteral("recommend"))) return false;
+    const auto goalName = goal.toString();
+    if (goalName != QLatin1String("balanced") && goalName != QLatin1String("smallest")
+        && goalName != QLatin1String("fastest-browse") && goalName != QLatin1String("fast-build")) return false;
+    *out = {mode.toString(), profile.toString(), goalName};
     return true;
 }
 
-QStringList getProfileArgs(const QString &name, QString *error)
+bool parseProfileArgs(const QJsonObject &details, QStringList *out)
 {
-    if (name == QStringLiteral("default"))
-        return {};
-
-    Envelope env;
-    QString failure;
-    if (!runDwarfsctlJson({QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"),
-                           QStringLiteral("get"), name},
-                          &env, &failure)) {
-        if (error)
-            *error = failure;
-        return {};
+    const auto profile = details.value(QStringLiteral("profile"));
+    const auto args = profile.toObject().value(QStringLiteral("args"));
+    if (!profile.isObject() || !args.isArray()) return false;
+    QStringList parsed;
+    for (const auto &arg : args.toArray()) {
+        if (!arg.isString()) return false;
+        parsed.append(arg.toString());
     }
-
-    QStringList result;
-    const auto args = env.details.value(QStringLiteral("profile")).toObject()
-                          .value(QStringLiteral("args")).toArray();
-    for (const auto &value : args) {
-        const QString argument = value.toString();
-        if (!argument.isEmpty())
-            result.append(argument);
-    }
-    return result;
+    *out = parsed;
+    return true;
 }
 
-struct CreationDefaults {
-    QString mode = QStringLiteral("recommend");
-    QString profile = QStringLiteral("default");
-    QString goal = QStringLiteral("balanced");
-};
-
-CreationDefaults loadCreationDefaults()
+bool validCreationSchema(const QJsonValue &schema)
 {
-    CreationDefaults result;
-    Envelope env;
-    if (!runDwarfsctlJson({QStringLiteral("config"), QStringLiteral("show"),
-                           QStringLiteral("--section"), QStringLiteral("creation")},
-                          &env, nullptr)) {
-        return result;
+    const auto categories = schema.toObject().value(QStringLiteral("categories"));
+    if (!schema.isObject() || !categories.isArray() || categories.toArray().isEmpty()) return false;
+    bool hasOptions = false;
+    for (const auto &category : categories.toArray()) {
+        const auto object = category.toObject();
+        const auto options = object.value(QStringLiteral("options"));
+        if (!category.isObject() || !object.value(QStringLiteral("name")).isString() || !options.isArray()) return false;
+        for (const auto &option : options.toArray()) {
+            const auto fields = option.toObject();
+            if (!option.isObject() || !fields.value(QStringLiteral("opt")).isString()
+                || fields.value(QStringLiteral("opt")).toString().isEmpty()
+                || !fields.value(QStringLiteral("label")).isString() || !fields.value(QStringLiteral("kind")).isString()) return false;
+            hasOptions = true;
+        }
     }
-    const QString mode = env.details.value(QStringLiteral("default_mode")).toString();
-    if (mode == QStringLiteral("profile") || mode == QStringLiteral("recommend"))
-        result.mode = mode;
-    const QString profile = env.details.value(QStringLiteral("default_profile")).toString();
-    if (!profile.isEmpty())
-        result.profile = profile;
-    const QString goal = env.details.value(QStringLiteral("recommendation_goal")).toString();
-    if (!goal.isEmpty())
-        result.goal = goal;
-    return result;
+    return hasOptions;
 }
 
 QString goalLabel(const QString &goal)
@@ -128,163 +109,332 @@ QString goalLabel(const QString &goal)
 BuildDialogResult promptBuildOptions(QWidget *parent, const QString &sourceDir)
 {
     BuildDialogResult result;
-    const CreationDefaults defaults = loadCreationDefaults();
 
     QDialog dialog(parent);
     dialog.setWindowTitle(i18n("Create DwarFS Image"));
     dialog.setModal(true);
-    dialog.setMinimumWidth(600);
+    dialog.setMinimumWidth(580);
 
     auto *root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(dwarfsctl_kde::contentMargins(&dialog));
+    root->setSpacing(dwarfsctl_kde::layoutSpacing(&dialog));
+    const QFileInfo sourceInfo(sourceDir);
+    auto *header = new QWidget(&dialog);
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(0, 0, 0, 0);
+    auto *sourceIcon = new QLabel(header);
+    sourceIcon->setPixmap(QIcon::fromTheme(QStringLiteral("folder")).pixmap(36, 36));
+    sourceIcon->setFixedSize(40, 40);
+    sourceIcon->setAlignment(Qt::AlignCenter);
+    auto *sourceText = new QWidget(header);
+    auto *sourceTextLayout = new QVBoxLayout(sourceText);
+    sourceTextLayout->setContentsMargins(0, 0, 0, 0);
+    sourceTextLayout->setSpacing(2);
+    auto *sourceName = new QLabel(sourceInfo.fileName(), sourceText);
+    sourceName->setFont(dwarfsctl_kde::headingFont(sourceName->font()));
+    sourceName->setWordWrap(true);
+    auto *sourcePath = new QLabel(sourceDir, sourceText);
+    sourcePath->setWordWrap(true);
+    sourcePath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    sourceTextLayout->addWidget(sourceName);
+    sourceTextLayout->addWidget(sourcePath);
+    headerLayout->addWidget(sourceIcon);
+    headerLayout->addWidget(sourceText, 1);
+    root->addWidget(header);
+
+    auto addDivider = [&] {
+        auto *line = new QFrame(&dialog);
+        line->setFrameShape(QFrame::HLine);
+        line->setFrameShadow(QFrame::Plain);
+        root->addWidget(line);
+    };
+    addDivider();
+
     auto *banner = new BannerWidget(&dialog);
     banner->setSeverity(BannerWidget::Severity::Warning);
-    root->addWidget(banner);
 
-    Envelope schemaEnvelope;
-    QString schemaError;
-    if (!runDwarfsctlJson({QStringLiteral("mkdwarfs"), QStringLiteral("schema")},
-                          &schemaEnvelope, &schemaError)) {
-        qCWarning(DWARFS_DOLPHIN_LOG) << "mkdwarfs schema probe failed" << schemaError;
-        QMessageBox::critical(&dialog, i18n("DwarFS creation unavailable"),
-                              i18n("Unable to load the image creation options from dwarfsctl.\n\n%1", schemaError));
-        return result;
-    }
-    QString versionWarning;
-    if (takeMkdwarfsWarningOnce(schemaEnvelope, &versionWarning)) {
-        banner->setTitleAndBody(i18n("Image creator version warning"), versionWarning);
-        banner->show();
-    }
-
-    auto *form = new QFormLayout();
-    form->setLabelAlignment(Qt::AlignRight);
-    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-    root->addLayout(form);
-
-    auto *sourceLabel = new QLabel(sourceDir, &dialog);
-    sourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    form->addRow(i18n("Source"), sourceLabel);
+    auto sectionFont = dialog.font();
+    sectionFont.setBold(true);
+    auto *saveTitle = new QLabel(i18n("Save as"), &dialog);
+    saveTitle->setFont(sectionFont);
+    root->addWidget(saveTitle);
 
     auto *outputRow = new QWidget(&dialog);
     auto *outputLayout = new QHBoxLayout(outputRow);
     outputLayout->setContentsMargins(0, 0, 0, 0);
     auto *outputEdit = new QLineEdit(outputRow);
-    outputEdit->setPlaceholderText(i18n("Select an output .dwarfs image"));
-    const QFileInfo sourceInfo(sourceDir);
-    outputEdit->setText(sourceInfo.dir().filePath(sourceInfo.fileName() + QStringLiteral(".dwarfs")));
+    outputEdit->setObjectName(QStringLiteral("buildOutput"));
+    outputEdit->setPlaceholderText(i18n("Image name.dwarfs"));
+    outputEdit->setText(sourceInfo.fileName() + QStringLiteral(".dwarfs"));
+    QString outputDirectory = sourceInfo.dir().absolutePath();
     auto *browseButton = new QPushButton(i18n("Browse…"), outputRow);
     outputLayout->addWidget(outputEdit, 1);
     outputLayout->addWidget(browseButton);
-    form->addRow(i18n("Save as"), outputRow);
+    root->addWidget(outputRow);
+
+    auto *destinationLabel = new QLabel(&dialog);
+    destinationLabel->setObjectName(QStringLiteral("buildDestination"));
+    destinationLabel->setWordWrap(true);
+    destinationLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    auto updateDestination = [&] {
+        const QString name = outputEdit->text().trimmed();
+        const QString path = QDir::isAbsolutePath(name)
+            ? name : QDir(outputDirectory).filePath(name);
+        const QString location = name.isEmpty() ? outputDirectory : QFileInfo(path).absolutePath();
+        destinationLabel->setText(i18n("Location: %1", QDir::toNativeSeparators(location)));
+        destinationLabel->setToolTip(location);
+    };
+    updateDestination();
+    root->addWidget(destinationLabel);
+    QObject::connect(outputEdit, &QLineEdit::textChanged, &dialog,
+                     [&](const QString &) { updateDestination(); });
 
     QObject::connect(browseButton, &QPushButton::clicked, &dialog, [&]() {
+        const QString current = outputEdit->text().trimmed();
+        const QString suggested = QDir::isAbsolutePath(current)
+            ? current : QDir(outputDirectory).filePath(current);
         const QString path = QFileDialog::getSaveFileName(
-            &dialog, i18n("Select output image"), outputEdit->text(),
+            &dialog, i18n("Select output image"), suggested,
             i18n("DwarFS images (*.dwarfs);;All files (*)"));
-        if (!path.isEmpty())
-            outputEdit->setText(path);
+        if (!path.isEmpty()) {
+            const QFileInfo chosen(path);
+            outputDirectory = chosen.absolutePath();
+            outputEdit->setText(chosen.fileName());
+            updateDestination();
+        }
     });
+
+    addDivider();
+    auto *compressionHeader = new QWidget(&dialog);
+    auto *compressionLayout = new QHBoxLayout(compressionHeader);
+    compressionLayout->setContentsMargins(0, 0, 0, 0);
+    auto *compressionTitle = new QLabel(i18n("Compression"), compressionHeader);
+    compressionTitle->setFont(sectionFont);
+    compressionLayout->addWidget(compressionTitle);
+    compressionLayout->addStretch();
+    auto *whyButton = new QToolButton(compressionHeader);
+    whyButton->setObjectName(QStringLiteral("buildWhy"));
+    whyButton->setText(i18n("Why this setting?"));
+    whyButton->setAutoRaise(true);
+    whyButton->hide();
+    compressionLayout->addWidget(whyButton);
+    root->addWidget(compressionHeader);
 
     auto *compressionStatus = new QLabel(&dialog);
     compressionStatus->setObjectName(QStringLiteral("compressionStatus"));
+    compressionStatus->setWordWrap(true);
+    compressionStatus->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    compressionStatus->setText(i18n("Loading image creation settings…"));
     compressionStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    form->addRow(i18n("Compression"), compressionStatus);
+    root->addWidget(compressionStatus);
 
-    auto *settingsHint = new QLabel(
-        i18n("Change compression defaults and profiles from the DwarFS tray Settings."), &dialog);
-    settingsHint->setWordWrap(true);
-    settingsHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
-    form->addRow(QString(), settingsHint);
+    auto *detailsPanel = new QFrame(&dialog);
+    detailsPanel->setObjectName(QStringLiteral("buildDetailsPanel"));
+    detailsPanel->setFrameShape(QFrame::StyledPanel);
+    auto *detailsLayout = new QVBoxLayout(detailsPanel);
+    detailsLayout->setContentsMargins(12, 10, 12, 10);
+    auto *recommendationDetails = new QLabel(detailsPanel);
+    recommendationDetails->setObjectName(QStringLiteral("buildRecommendationDetails"));
+    recommendationDetails->setWordWrap(true);
+    recommendationDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    recommendationDetails->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    detailsLayout->addWidget(recommendationDetails);
+    detailsPanel->hide();
+    root->addWidget(detailsPanel);
+    QObject::connect(whyButton, &QToolButton::clicked, &dialog, [=, &dialog] {
+        const bool expanded = !detailsPanel->isVisible();
+        detailsPanel->setVisible(expanded);
+        whyButton->setText(expanded ? i18n("Hide explanation") : i18n("Why this setting?"));
+        QTimer::singleShot(0, &dialog, [&dialog] { dialog.adjustSize(); });
+    });
 
-    auto *advancedBox = new QGroupBox(i18n("Build Options"), &dialog);
-    advancedBox->setCheckable(true);
-    advancedBox->setChecked(false);
-    auto *advancedLayout = new QVBoxLayout(advancedBox);
-    auto *force = new QCheckBox(i18n("Replace an existing image"), advancedBox);
-    auto *overwrite = new QCheckBox(i18n("Replace files without asking"), advancedBox);
-    auto *dryRun = new QCheckBox(i18n("Preview only; do not create an image"), advancedBox);
+    root->addWidget(banner);
+
+    auto *moreButton = new QToolButton(&dialog);
+    moreButton->setObjectName(QStringLiteral("buildMoreOptions"));
+    moreButton->setText(i18n("More options"));
+    moreButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    moreButton->setArrowType(Qt::RightArrow);
+    moreButton->setAutoRaise(true);
+    root->addWidget(moreButton, 0, Qt::AlignLeft);
+    auto *advancedPanel = new QWidget(&dialog);
+    advancedPanel->setObjectName(QStringLiteral("buildOptionsPanel"));
+    auto *advancedLayout = new QVBoxLayout(advancedPanel);
+    advancedLayout->setContentsMargins(20, 0, 0, 0);
+    auto *force = new QCheckBox(i18n("Replace an existing image"), advancedPanel);
+    force->setObjectName(QStringLiteral("buildReplaceExisting"));
+    auto *previewCheck = new QCheckBox(i18n("Measure image size before creating"), advancedPanel);
+    previewCheck->setObjectName(QStringLiteral("buildPreviewOnly"));
+    auto *previewHint = new QWidget(advancedPanel);
+    previewHint->setObjectName(QStringLiteral("buildPreviewHint"));
+    auto *previewHintLayout = new QVBoxLayout(previewHint);
+    previewHintLayout->setContentsMargins(0, 0, 0, 0);
+    previewHintLayout->setSpacing(2);
+    auto *previewDescription = new QLabel(i18n("Builds and measures a temporary image. Create it from the preview, or close to discard it."), previewHint);
+    previewDescription->setObjectName(QStringLiteral("buildPreviewDescription"));
+    previewDescription->setWordWrap(true);
+    auto *previewTime = new QLabel(i18n("This may take as long as creating the image."), previewHint);
+    previewTime->setObjectName(QStringLiteral("buildPreviewTime"));
+    previewTime->setWordWrap(true);
+    previewHintLayout->addWidget(previewDescription);
+    previewHintLayout->addWidget(previewTime);
+    previewCheck->setToolTip(i18n("Builds a temporary image to measure its actual size. Create it from the preview, or close to discard it. This may take as long as creating the image."));
+    previewHint->hide();
     advancedLayout->addWidget(force);
-    advancedLayout->addWidget(overwrite);
-    advancedLayout->addWidget(dryRun);
-    root->addWidget(advancedBox);
+    advancedLayout->addWidget(previewCheck);
+    advancedLayout->addWidget(previewHint);
+    QObject::connect(previewCheck, &QCheckBox::toggled, &dialog, [=, &dialog](bool checked) {
+        previewHint->setVisible(checked);
+        previewHint->updateGeometry();
+        advancedLayout->activate();
+        QTimer::singleShot(0, &dialog, [&dialog] { dialog.adjustSize(); });
+    });
+    advancedPanel->hide();
+    root->addWidget(advancedPanel);
+    QObject::connect(moreButton, &QToolButton::clicked, &dialog, [=, &dialog] {
+        const bool expanded = !advancedPanel->isVisible();
+        advancedPanel->setVisible(expanded);
+        moreButton->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+        QTimer::singleShot(0, &dialog, [&dialog] { dialog.adjustSize(); });
+    });
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, &dialog);
     auto *createButton = buttons->button(QDialogButtonBox::Ok);
     createButton->setText(i18n("Create"));
+    createButton->setEnabled(false);
+    QObject::connect(previewCheck, &QCheckBox::toggled, &dialog,
+                     [=](bool preview) { createButton->setText(preview ? i18n("Preview") : i18n("Create")); });
+    auto *retryButton = buttons->addButton(i18n("Retry"), QDialogButtonBox::ActionRole);
+    retryButton->setObjectName(QStringLiteral("buildRetry"));
+    retryButton->hide();
     root->addWidget(buttons);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
     QStringList compressionArgs;
     QString compressionName;
-    if (defaults.mode == QStringLiteral("profile")) {
-        compressionName = defaults.profile;
-        QString profileError;
-        compressionArgs = getProfileArgs(defaults.profile, &profileError);
-        if (profileError.isEmpty()) {
-            compressionStatus->setText(defaults.profile == QStringLiteral("default")
-                ? i18n("Default compression")
-                : i18n("Profile: %1", defaults.profile));
-        } else {
-            compressionName = QStringLiteral("default");
-            compressionStatus->setText(i18n("Default compression"));
-            banner->setTitleAndBody(i18n("Profile unavailable"),
-                i18n("The configured profile could not be loaded, so default compression will be used. %1", profileError));
-            banner->show();
-        }
-    } else {
-        compressionName = QStringLiteral("recommended");
-        compressionStatus->setText(i18n("Choosing the best settings for this folder…"));
-        createButton->setEnabled(false);
-    }
+    bool ready = false;
+    bool loading = false;
+    auto updateCreate = [&] { createButton->setEnabled(ready && !loading && !outputEdit->text().trimmed().isEmpty()); };
+    QObject::connect(outputEdit, &QLineEdit::textChanged, &dialog, [&](const QString &) { updateCreate(); });
+    auto fail = [&](const QString &message) {
+        loading = false;
+        ready = false;
+        updateCreate();
+        compressionStatus->setText(i18n("Compression settings unavailable"));
+        banner->setTitleAndBody(i18n("Image creation unavailable"), message);
+        banner->show();
+        retryButton->show();
+        retryButton->setEnabled(true);
+    };
+    auto prepared = [&] {
+        loading = false;
+        ready = true;
+        updateCreate();
+        retryButton->hide();
+    };
 
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        if (!ready || loading) return;
         result.accepted = true;
-        result.outputPath = outputEdit->text().trimmed();
+        const QString imageName = outputEdit->text().trimmed();
+        result.outputPath = QDir::isAbsolutePath(imageName)
+            ? imageName : QDir(outputDirectory).filePath(imageName);
         result.profileName = compressionName;
         result.profileArgs = compressionArgs;
         result.force = force->isChecked();
-        result.overwriteOutput = overwrite->isChecked();
-        result.dryRun = dryRun->isChecked();
+        result.preview = previewCheck->isChecked();
         dialog.accept();
     });
 
-    if (defaults.mode == QStringLiteral("recommend")) {
-        QTimer::singleShot(0, &dialog, [&]() {
-            DwarfsctlJob::Request request;
-            request.title = i18n("Choose compression settings automatically");
-            request.args = {QStringLiteral("mkdwarfs"), QStringLiteral("recommend"), sourceDir,
-                            QStringLiteral("--goal"), defaults.goal};
-            request.timeout_ms = 30000;
-            auto *job = new DwarfsctlJob(request, &dialog);
-            job->setUiDelegate(nullptr);
-            QObject::connect(job, &KJob::result, &dialog, [&, job]() {
-                const auto recommendation = parseRecommendation(job->envelope().details);
-                if (job->error() || !recommendation.valid) {
-                    compressionName = QStringLiteral("default");
-                    compressionArgs.clear();
-                    compressionStatus->setText(i18n("Default compression"));
-                    const QString reason = job->error()
-                        ? job->errorString()
-                        : i18n("The recommendation response was invalid.");
-                    banner->setTitleAndBody(i18n("Automatic choice unavailable"),
-                        i18n("DwarFS defaults will be used. %1", reason));
-                    banner->show();
-                    createButton->setEnabled(true);
+    std::function<void()> load;
+    load = [&] {
+        if (loading) return;
+        loading = true;
+        ready = false;
+        updateCreate();
+        retryButton->setEnabled(false);
+        banner->hide();
+        whyButton->hide();
+        detailsPanel->hide();
+        whyButton->setText(i18n("Why this setting?"));
+        compressionStatus->setText(i18n("Loading image creation settings…"));
+        BackendQuery::ui(&dialog, [&](bool valid, const dwarfsctl_kde::UiConfig &, const QString &error) {
+            if (!valid) { fail(error); return; }
+            BackendQuery::json(&dialog, {QStringLiteral("config"), QStringLiteral("show"),
+                                         QStringLiteral("--section"), QStringLiteral("creation")},
+                               [&](const BackendReply &reply) {
+                CreationDefaults defaults;
+                if (!reply.ok || !parseCreationDefaults(reply.envelope.details, &defaults)) {
+                    fail(reply.ok ? i18n("The image creation settings response is invalid.") : reply.error);
                     return;
                 }
-
-                compressionArgs = recommendation.flags;
-                compressionStatus->setText(i18n("Optimized for %1", goalLabel(defaults.goal)));
-                compressionStatus->setToolTip(recommendation.reasons.join(QStringLiteral("\n")));
-                if (!recommendation.warnings.isEmpty()) {
-                    banner->setTitleAndBody(i18n("Some items could not be fully considered"),
-                                            recommendation.warnings.join(QStringLiteral("\n")));
-                    banner->show();
-                }
-                createButton->setEnabled(true);
+                BackendQuery::json(&dialog, {QStringLiteral("mkdwarfs"), QStringLiteral("schema")},
+                                   [&, defaults](const BackendReply &schemaReply) {
+                    const auto schema = schemaReply.envelope.details.value(QStringLiteral("schema"));
+                    if (!schemaReply.ok || !validCreationSchema(schema)) {
+                        fail(schemaReply.ok ? i18n("The image creation schema response is invalid.") : schemaReply.error);
+                        return;
+                    }
+                    if (defaults.mode == QLatin1String("profile")) {
+                        if (defaults.profile == QLatin1String("default")) {
+                            compressionName = defaults.profile;
+                            compressionArgs.clear();
+                            compressionStatus->setText(i18n("Default compression"));
+                            prepared();
+                            return;
+                        }
+                        BackendQuery::json(&dialog, {QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"),
+                                                     QStringLiteral("get"), defaults.profile},
+                                           [&, defaults](const BackendReply &profileReply) {
+                            QStringList args;
+                            if (!profileReply.ok || !parseProfileArgs(profileReply.envelope.details, &args)) {
+                                fail(profileReply.ok ? i18n("The selected profile response is invalid.") : profileReply.error);
+                                return;
+                            }
+                            compressionName = defaults.profile;
+                            compressionArgs = args;
+                            compressionStatus->setText(i18n("Profile: %1", defaults.profile));
+                            prepared();
+                        });
+                        return;
+                    }
+                    compressionStatus->setText(i18n("Choosing the best settings for this folder…"));
+                    DwarfsctlJob::Request request;
+                    request.title = i18n("Choose compression settings automatically");
+                    request.args = {QStringLiteral("mkdwarfs"), QStringLiteral("recommend"), sourceDir,
+                                    QStringLiteral("--goal"), defaults.goal};
+                    request.timeout_ms = 30000;
+                    request.show_ui = false;
+                    request.responseLimit = BackendQuery::ResponseLimit;
+                    auto *job = new DwarfsctlJob(request, &dialog);
+                    QObject::connect(job, &KJob::result, &dialog, [&, job, defaults] {
+                        const auto recommendation = parseRecommendation(job->envelope().details);
+                        if (job->error() || !recommendation.valid) {
+                            fail(job->error() ? job->errorString() : i18n("The recommendation response was invalid."));
+                            return;
+                        }
+                        compressionName = QStringLiteral("recommended");
+                        compressionArgs = recommendation.flags;
+                        compressionStatus->setText(i18n("Optimized for %1", goalLabel(defaults.goal)));
+                        QStringList explanation = recommendation.reasons;
+                        explanation.append(recommendation.notes);
+                        explanation.append(i18n("Change this default in DwarFS tray Settings."));
+                        recommendationDetails->setText(explanation.join(QStringLiteral("\n\n")));
+                        whyButton->show();
+                        if (!recommendation.warnings.isEmpty()) {
+                            banner->setTitleAndBody(i18n("Some items could not be fully considered"),
+                                                    recommendation.warnings.join(QStringLiteral("\n")));
+                            banner->show();
+                        }
+                        prepared();
+                    });
+                    job->start();
+                });
             });
-            job->start();
         });
-    }
+    };
+    QObject::connect(retryButton, &QPushButton::clicked, &dialog, [&] { load(); });
+    QTimer::singleShot(0, &dialog, [&] { load(); });
 
     dialog.exec();
     return result;

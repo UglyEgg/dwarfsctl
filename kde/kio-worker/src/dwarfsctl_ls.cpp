@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "dwarfsctl_ls.h"
+#include "dwarfsctl_exec.h"
+#include "fileidentity.h"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -17,44 +19,19 @@ namespace DwarfsKio {
 
 namespace {
 
-/// Resolve the backend program.
-///
-/// Mirrors DwarfsctlRunner::dwarfsctlProgram() in kde/kf6-plugin: DWARFSCTL_BIN
-/// wins, otherwise "dwarfsctl" is looked up on PATH. Resolved through
-/// QStandardPaths so a bare name is not handed to the process launcher blindly.
-QString programPath()
-{
-    const QString override = qEnvironmentVariable("DWARFSCTL_BIN");
-    if (!override.isEmpty()) {
-        return override;
-    }
-    const QString found = QStandardPaths::findExecutable(QStringLiteral("dwarfsctl"));
-    return found.isEmpty() ? QStringLiteral("dwarfsctl") : found;
-}
-
-/// Identity of an image file as far as the cache is concerned.
-///
-/// Size + mtime is the same freshness test `make` uses. It is not a cryptographic
-/// guarantee, and does not need to be: this cache only exists so a browse of one
-/// image is not O(entries) process spawns, and a rebuilt or replaced image has a
-/// different size or mtime in every realistic case. A hit for an image modified
-/// within the same second to the same size would serve a stale listing; that is
-/// accepted over the alternative (hashing the whole file per browse, which costs
-/// more than the listings it would save).
+// File metadata is a change detector, not a content hash. Inode and nanosecond
+// change time distinguish ordinary atomic replacements with preserved mtime.
 struct CacheKey {
     QString path;
-    qint64 size = -1;
-    qint64 mtimeMs = -1;
-
-    bool operator==(const CacheKey &o) const
-    {
-        return path == o.path && size == o.size && mtimeMs == o.mtimeMs;
-    }
+    std::optional<dwarfsctl_kde::FileIdentity> identity;
+    bool operator==(const CacheKey &) const = default;
 };
-
-size_t qHash(const CacheKey &k, size_t seed = 0)
+size_t qHash(const CacheKey &key, size_t seed = 0)
 {
-    return qHashMulti(seed, k.path, k.size, k.mtimeMs);
+    if (!key.identity) return qHashMulti(seed, key.path, -1);
+    const auto &id = *key.identity;
+    return qHashMulti(seed, key.path, id.device, id.inode, id.size,
+        id.mtimeSeconds, id.mtimeNanoseconds, id.ctimeSeconds, id.ctimeNanoseconds);
 }
 
 /// One cached listing, with the entry paths indexed for lookup.
@@ -76,20 +53,13 @@ QHash<CacheKey, CachedListing> &listingCache()
 /// cannot be stat'ed (in which case not caching is the honest behaviour).
 CacheKey keyFor(const QString &imagePath)
 {
-    CacheKey key;
-    key.path = imagePath;
-    const QFileInfo info(imagePath);
-    if (info.exists()) {
-        key.size = info.size();
-        key.mtimeMs = info.lastModified().toMSecsSinceEpoch();
-    }
-    return key;
+    return {imagePath, dwarfsctl_kde::fileIdentity(imagePath)};
 }
 
 CachedListing *cachedListingFor(const QString &imagePath)
 {
     const CacheKey key = keyFor(imagePath);
-    if (key.size < 0) {
+    if (!key.identity) {
         return nullptr;
     }
     auto it = listingCache().find(key);
@@ -99,11 +69,20 @@ CachedListing *cachedListingFor(const QString &imagePath)
     return &it.value();
 }
 
-void remember(const QString &imagePath, const QVector<ListedEntry> &entries)
+void remember(const CacheKey &key, const QVector<ListedEntry> &entries)
 {
-    const CacheKey key = keyFor(imagePath);
-    if (key.size < 0) {
+    if (!key.identity) {
         return; // unreadable: do not cache a listing we could not attribute
+    }
+    auto &cache = listingCache();
+    cache.clear();
+    // One active image, with an estimated retained entry/index budget. Larger
+    // listings still succeed; exact entry queries remain available uncached.
+    constexpr qsizetype maximumBytes = 32 * 1024 * 1024;
+    qsizetype bytes = 0;
+    for (const auto &entry : entries) {
+        bytes += sizeof(ListedEntry) + 64 + 2 * (entry.name.size() + 2 * entry.path.size());
+        if (bytes > maximumBytes) return;
     }
     CachedListing cached;
     cached.key = key;
@@ -112,7 +91,7 @@ void remember(const QString &imagePath, const QVector<ListedEntry> &entries)
     for (int i = 0; i < entries.size(); ++i) {
         cached.byPath.insert(entries.at(i).path, i);
     }
-    listingCache().insert(key, cached);
+    cache.insert(key, cached);
 }
 
 /// Parse the `entries` array of a successful envelope into `out`.
@@ -175,7 +154,7 @@ ListResult runDwarfsctl(const QStringList &args, int timeoutMs)
 {
     ListResult out;
 
-    const QString program = programPath();
+    const QString program = dwarfsctl_kde::dwarfsctlExe();
 
     QProcess process;
     process.setProgram(program);
@@ -216,12 +195,9 @@ ListResult parseEnvelope(const QByteArray &stdoutBytes, int exitCode, const QByt
     // A non-zero exit is a failure regardless of what was printed. Checking this
     // FIRST matters: if the exit status were ignored and the (possibly empty)
     // stdout parsed instead, a broken backend would look like an image with no
-    // contents. That is the fabricated-success class this project has shipped
-    // twice -- `extract` reporting success while writing nothing, and `build`
-    // accepting a zero-byte artifact.
+    // contents.
     if (exitCode != 0) {
         out.errorKind = QStringLiteral("BackendFailed");
-        out.error = QStringLiteral("dwarfsctl ls failed (exit code %1)").arg(exitCode);
 
         // Prefer the backend's own explanation when it gave one. The envelope is
         // JSON on stdout even for failures, so try that before falling back to
@@ -241,6 +217,8 @@ ListResult parseEnvelope(const QByteArray &stdoutBytes, int exitCode, const QByt
                 out.error = err;
             }
         }
+        if (out.error.isEmpty())
+            out.error = QStringLiteral("dwarfsctl ls failed (exit code %1)").arg(exitCode);
         return out;
     }
 
@@ -299,10 +277,16 @@ ListResult listImage(const QString &imagePath, int timeoutMs)
         return out;
     }
 
-    const ListResult out = runDwarfsctl({QStringLiteral("ls"), imagePath}, timeoutMs);
-    if (out.ok) {
-        remember(imagePath, out.entries);
+    const CacheKey before = keyFor(imagePath);
+    ListResult out = runDwarfsctl({QStringLiteral("ls"), imagePath}, timeoutMs);
+    if (!(before == keyFor(imagePath))) {
+        out.ok = false;
+        out.entries.clear();
+        out.errorKind = QStringLiteral("SourceChanged");
+        out.error = QStringLiteral("The image changed while its contents were being read. Try again.");
+        return out;
     }
+    if (out.ok) remember(before, out.entries);
     return out;
 }
 
@@ -329,12 +313,16 @@ ListResult lookupEntry(const QString &imagePath, const QString &innerPath, int t
     }
 
     // Cold path: narrow the listing to the one entry instead of the whole tree.
-    return runDwarfsctl({QStringLiteral("ls"),
-                         QStringLiteral("--path"),
-                         want,
-                         QStringLiteral("--entry-only"),
-                         imagePath},
-                        timeoutMs);
+    const CacheKey before = keyFor(imagePath);
+    ListResult out = runDwarfsctl({QStringLiteral("ls"), QStringLiteral("--path"), want,
+        QStringLiteral("--entry-only"), imagePath}, timeoutMs);
+    if (!(before == keyFor(imagePath))) {
+        out.ok = false;
+        out.entries.clear();
+        out.errorKind = QStringLiteral("SourceChanged");
+        out.error = QStringLiteral("The image changed while its contents were being read. Try again.");
+    }
+    return out;
 }
 
 void clearListingCache()

@@ -21,6 +21,16 @@ Recommendation parseRecommendation(const QJsonObject &details)
         || !strings(QStringLiteral("reasons"), result.reasons)
         || !strings(QStringLiteral("warnings"), result.warnings)
         || result.flags.isEmpty() || result.reasons.isEmpty()) return result;
+    if (rec.contains(QStringLiteral("notes")) && !strings(QStringLiteral("notes"), result.notes)) return result;
+    // Older backends sent this routine disclosure as a warning.
+    for (auto it = result.warnings.begin(); it != result.warnings.end();) {
+        if (it->startsWith(QLatin1String("Metadata heuristic only:"))) {
+            result.notes.append(*it);
+            it = result.warnings.erase(it);
+        } else {
+            ++it;
+        }
+    }
     result.confidence = rec.value(QStringLiteral("confidence")).toString();
     result.valid = result.confidence == QLatin1String("low") || result.confidence == QLatin1String("medium");
     return result;

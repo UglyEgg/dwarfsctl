@@ -32,7 +32,7 @@ Successful response:
 {
   "command": "mount",
   "ok": true,
-  "data": {},
+  "details": {},
   "error": null
 }
 ```
@@ -43,7 +43,7 @@ Failed response:
 {
   "command": "mount",
   "ok": false,
-  "data": null,
+  "details": null,
   "error": {
     "kind": "cli",
     "code": 6,
@@ -52,7 +52,12 @@ Failed response:
 }
 ```
 
-Clients must ignore unknown fields in `data` and `error`.
+Clients must ignore unknown fields in `details` and `error`.
+
+While the service is checking or changing a volume, concurrent executor requests
+may return a `Busy` error. Wait for that operation to finish before retrying. A request
+timeout does not cancel an operation already dispatched to the service; its
+outcome remains unconfirmed until the mount state is checked.
 
 ## Methods
 
@@ -66,18 +71,27 @@ Returns the current managed mounts:
 
 ```json
 {
-  "mounts": [
-    {
-      "image": "/home/user/archive.dwarfs",
-      "mountpoint": "/run/user/1000/dwarfs/archive-a1b2c3d4"
-    }
-  ]
+  "command": "mount_list",
+  "ok": true,
+  "details": {
+    "mounts": [
+      {
+        "image": "/home/user/archive.dwarfs",
+        "mountpoint": "/run/user/1000/dwarfs/archive-a1b2c3d4"
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
 ### `string Status(string imagePath)`
 
-Returns the current state for an image or mountpoint.
+Returns the current state for an image or recorded mountpoint. Source paths
+can remain recorded after the image is moved or removed. Optional
+`source_available`, `generation_verified` and `source_changed` flags may be null
+when a bounded metadata check cannot establish their value. A missing source
+does not unmount an existing volume.
 
 ### `string Mount(string imagePath)`
 

@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <memory>
 
 using namespace DwarfsKio;
 
@@ -139,6 +140,89 @@ private Q_SLOTS:
         QVERIFY(!result.ok);
         QCOMPARE(result.errorKind, QStringLiteral("DestinationIsDirectory"));
         QVERIFY(!QFileInfo::exists(log));
+    }
+
+    void copyCancellationCleansOnlyOwnedStaging_data()
+    {
+        QTest::addColumn<bool>("ignoreTermination");
+        QTest::newRow("cooperative") << false;
+        QTest::newRow("forced-outcome-unknown") << true;
+    }
+
+    void copyCancellationCleansOnlyOwnedStaging()
+    {
+        QFETCH(bool, ignoreTermination);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString script = QStringLiteral(R"PY(#!/usr/bin/python3
+import os,sys,time,signal
+if %1: signal.signal(signal.SIGTERM,signal.SIG_IGN)
+stage=os.path.join(os.environ['DWARFSCTL_COPY_STAGING_DIR'],'partial')
+with open(stage,'wb') as out: out.write(b'x'*65536)
+with open(sys.argv[4]+'.ready','w') as out: out.write(stage)
+while True: time.sleep(0.01)
+)PY").arg(ignoreTermination ? QStringLiteral("True") : QStringLiteral("False"));
+        const QString backend = writeTempFile(dir, QStringLiteral("backend"), script.toUtf8());
+        QVERIFY(QFile::setPermissions(backend, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const BackendEnv env(backend);
+        const QString destination = dir.filePath(QStringLiteral("result"));
+        QVERIFY(QDir(dir.path()).mkdir(QStringLiteral(".dwarfsctl-copy-foreign")));
+        const QString foreign = writeTempFile(dir, QStringLiteral(".dwarfsctl-copy-foreign/keep"), "competitor");
+        bool witnessed = false;
+        const auto result = copyOutToLocal(QStringLiteral("/image"), QStringLiteral("/file"), destination, false, [&] {
+            QFile ready(destination + QStringLiteral(".ready"));
+            if (!ready.open(QIODevice::ReadOnly)) return false;
+            const QString stage = QString::fromUtf8(ready.readAll());
+            witnessed = QFileInfo(stage).size() > 0;
+            return witnessed;
+        });
+        QVERIFY(witnessed);
+        QVERIFY(!result.ok);
+        QCOMPARE(result.errorKind, ignoreTermination ? QStringLiteral("CleanupUnconfirmed") : QStringLiteral("Cancelled"));
+        QVERIFY(!QFileInfo::exists(destination));
+        QCOMPARE(QDir(dir.path()).entryList({QStringLiteral(".dwarfsctl-copy-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot), QStringList{QStringLiteral(".dwarfsctl-copy-foreign")});
+        QFile kept(foreign);
+        QVERIFY(kept.open(QIODevice::ReadOnly));
+        QCOMPARE(kept.readAll(), QByteArray("competitor"));
+    }
+
+    void publicationConflictUsesTypedReason()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString backend = writeTempFile(dir, QStringLiteral("backend"), R"SH(#!/bin/sh
+printf '{"ok":false,"error":{"kind":"InvalidPath","message":"arbitrary diagnostic"},"details":{"reason":"destination_exists"}}\n'
+exit 4
+)SH");
+        QVERIFY(QFile::setPermissions(backend, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const BackendEnv env(backend);
+        const auto result = copyOutToLocal(QStringLiteral("/image"), QStringLiteral("/file"), dir.filePath(QStringLiteral("dest")), false);
+        QVERIFY(!result.ok);
+        QCOMPARE(result.errorKind, QStringLiteral("DestinationExists"));
+        QCOMPARE(result.error, QStringLiteral("arbitrary diagnostic"));
+    }
+
+    void materialisedLeaseFollowsItsLastReference()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString backend = writeCopyBackend(dir, dir.filePath(QStringLiteral("calls")));
+        const BackendEnv env(backend);
+        QString path;
+        std::weak_ptr<QTemporaryDir> owner;
+        {
+            auto first = materialise(QStringLiteral("/image"), QStringLiteral("/file"));
+            QVERIFY2(first.ok, qPrintable(first.error));
+            path = first.localPath;
+            owner = first.directory;
+            auto last = first;
+            first = {};
+            QVERIFY(QFileInfo::exists(path));
+            QVERIFY(!owner.expired());
+        }
+        QVERIFY(owner.expired());
+        QVERIFY(!QFileInfo::exists(path));
+        QVERIFY(!QFileInfo::exists(QFileInfo(path).absolutePath()));
     }
 
     // --- streamFile: bounded reading, no backend needed --------------------

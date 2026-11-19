@@ -5,7 +5,11 @@
 
 #include <KPageDialog>
 #include <QString>
+#include <QStringList>
+#include <QList>
+#include <QJsonObject>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -25,13 +29,22 @@ protected:
     void accept() override;
 
 private:
-    bool loadSettings();
-    bool loadProfiles(const QString& selectedProfile = {});
-    bool saveSettings();
+    void loadSettings(bool preserveEdits = false);
+    void loadProfiles(const QString& selectedProfile);
+    bool applyProfiles(const QJsonObject &details, const QString &selection);
+    void saveSettings();
+    void setBusy(bool busy, const QString &message = {});
     void openProfileEditor();
     void showError(const QString& message);
     void updateCreationControls();
 
+    bool m_ready = false;
+    bool m_busy = false;
+    bool m_needsReload = false;
+    QObject *m_queryContext = nullptr;
+    QAction *m_retry = nullptr;
+    QList<QWidget *> m_backendPages;
+    QStringList m_profiles;
     KMessageWidget* m_message = nullptr;
     QCheckBox* m_openAfterMount = nullptr;
     QSpinBox* m_recentLimit = nullptr;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "placesmanager.h"
+#include "mount_liveness.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -34,16 +35,15 @@ QString labelForImage(const QString &imagePath, const QString &mountpoint)
     return label;
 }
 
-QString iconForImage(const QString &imagePath)
+} // namespace
+
+QString placesIconForImage(const QString &imagePath)
 {
     const QString fallback = QStringLiteral("dwarfsctl-volume");
-    QFile sidecar(imagePath + QStringLiteral(".meta.json"));
-    if (!sidecar.open(QIODevice::ReadOnly)) {
-        return fallback;
-    }
-
+    const auto bytes = boundedRegularFileRead(imagePath + QStringLiteral(".meta.json"));
+    if (bytes.isEmpty()) return fallback;
     QJsonParseError error {};
-    const QJsonDocument document = QJsonDocument::fromJson(sidecar.readAll(), &error);
+    const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()
         || document.object().value(QStringLiteral("version")).toInt() != 1) {
         return fallback;
@@ -63,9 +63,7 @@ QString iconForImage(const QString &imagePath)
     return icon;
 }
 
-} // namespace
-
-void syncPlacesEntry(bool add, const QString &imagePath, const QString &mountpoint)
+void syncPlacesEntry(bool add, const QString &imagePath, const QString &mountpoint, const QString &icon)
 {
     if (mountpoint.isEmpty()) {
         return;
@@ -96,7 +94,7 @@ void syncPlacesEntry(bool add, const QString &imagePath, const QString &mountpoi
     if (add) {
         model.addPlace(labelForImage(imagePath, mountpoint),
                        url,
-                       iconForImage(imagePath),
+                       icon.isEmpty() ? QStringLiteral("dwarfsctl-volume") : icon,
                        QString());
     }
 }

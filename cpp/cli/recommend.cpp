@@ -141,23 +141,24 @@ J recommend(Input const &in) {
     reasons.push_back("At least 70% of sampled bytes have commonly compressed "
                       "extensions; avoid expensive recompression.");
   }
-  J warnings = J::array({"Metadata heuristic only: extensions do not prove "
-                         "compressibility; no benchmark was run."});
+  J notes = J::array({"Recommendations use file metadata and extensions; no "
+                      "compression benchmark was run."});
+  J warnings = J::array();
   if (p["truncated"] == true)
     warnings.push_back("Scan limit reached; counts and recommendations cover "
                        "only the inspected portion.");
   if (number(p, "unreadable"))
     warnings.push_back("Some entries could not be inspected.");
   if (number(p, "skipped_symlinks"))
-    warnings.push_back(
+    notes.push_back(
         "Symbolic links were skipped; their targets were not inspected.");
   if (number(p, "skipped_special"))
-    warnings.push_back("Special files were skipped.");
+    notes.push_back("Special files were skipped.");
   if (!number(p, "files"))
-    warnings.push_back(
+    notes.push_back(
         "No regular files were observed; using the selected goal's defaults.");
   if (number(p, "files") > number(p, "sampled_files"))
-    warnings.push_back("Extension sampling used the first 512 regular files in "
+    notes.push_back("Extension sampling used the first 512 regular files in "
                        "sorted depth-first order.");
   auto confidence = p["truncated"] == true || number(p, "unreadable") ||
                             number(p, "files") < 10 ||
@@ -170,6 +171,7 @@ J recommend(Input const &in) {
   validate_profile(flags);
   J rec = {{"flags_only", flags},
            {"reasons", reasons},
+           {"notes", notes},
            {"warnings", warnings},
            {"confidence", confidence}};
   J result = {{"schema", "dwarfsctl.recommend.v1"},
@@ -208,7 +210,7 @@ J recommend(Input const &in) {
     try {
       atomic_write(path, result.dump());
     } catch (std::exception const &) {
-      result["recommendation"]["warnings"].push_back(
+      result["recommendation"]["notes"].push_back(
           "Recommendation cache could not be written; result is still usable.");
     }
   return result;

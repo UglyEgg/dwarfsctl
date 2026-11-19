@@ -24,10 +24,16 @@
 #include <QStandardPaths>
 #include <QTest>
 #include <QTemporaryDir>
+#include <QElapsedTimer>
 
 #include <cerrno>
 #include <csignal>
+#include <future>
+#include <vector>
+#include <QSemaphore>
+#include <memory>
 #include <sys/types.h>
+#include <sys/stat.h>
 
 using namespace dwarfsctl_tray;
 
@@ -153,11 +159,105 @@ private Q_SLOTS:
 
     /// The probe answers for a real filesystem, and reports it as live: the
     /// bound and the fork must not turn a working path into a failure.
+    void optionalMetadataReadsAreRegularAndBounded()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto regular = directory.filePath(QStringLiteral("icon.json"));
+        QFile file(regular); QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray expected("{\"version\":1,\"places\":{\"icon\":\"folder\"}}");
+        QCOMPARE(file.write(expected), expected.size()); file.close();
+        QCOMPARE(boundedRegularFileRead(regular), expected);
+        QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(QByteArray(4097, 'x')), qint64(4097)); file.close();
+        QVERIFY(boundedRegularFileRead(regular).isEmpty());
+        const auto fifo = directory.filePath(QStringLiteral("icon.fifo"));
+        QVERIFY(::mkfifo(QFile::encodeName(fifo).constData(), 0600) == 0);
+        QElapsedTimer timer; timer.start();
+        QVERIFY(boundedRegularFileRead(fifo).isEmpty());
+        QVERIFY2(timer.elapsed() < 1000, "Optional FIFO metadata blocked a reader");
+    }
+
+    void kernelObservationDistinguishesPresentAndAbsent()
+    {
+        QCOMPARE(observeMount(QStringLiteral("/proc")).presence, MountPresence::Present);
+        QCOMPARE(observeMount(QStringLiteral("/proc")).source, QStringLiteral("proc"));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QCOMPARE(observeMount(directory.path()).presence, MountPresence::Absent);
+        QCOMPARE(observeMount(directory.filePath(QStringLiteral("absent"))).presence, MountPresence::Absent);
+        QCOMPARE(observeMount({}).presence, MountPresence::Unknown);
+    }
+
+    void boundedMetadataPreservesIdentityAndMissingErrors()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        struct stat value {};
+        int error = -1;
+        QVERIFY(boundedFileStat(directory.path(), &value, &error));
+        QCOMPARE(error, 0);
+        QVERIFY(S_ISDIR(value.st_mode));
+        QVERIFY(!boundedFileStat(directory.filePath(QStringLiteral("absent")), &value, &error));
+        QCOMPARE(error, ENOENT);
+    }
+
+    void boundedCanonicalPathPreservesAliases()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto alias = directory.filePath(QStringLiteral("alias"));
+        QVERIFY(QFile::link(directory.path(), alias));
+        QCOMPARE(boundedCanonicalFilePath(alias), directory.path());
+        QVERIFY(boundedCanonicalFilePath(directory.filePath(QStringLiteral("absent"))).isEmpty());
+        QVERIFY(isMounted(QStringLiteral("/")));
+    }
+
     void probeOnAWorkingFilesystemIsLive()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         QCOMPARE(probeMountLiveness(tmp.path()), MountLiveness::Live);
+    }
+
+    void kernelSourceMustMatchTheRequestedImage()
+    {
+        // procfs has a real, known kernel mount source. This exercises the
+        // parser without introducing a mount or relying on a registry claim.
+        if (!isMounted(QStringLiteral("/proc"))) QSKIP("procfs mount unavailable");
+        QVERIFY(mountImageMatches(QStringLiteral("/proc"), QStringLiteral("proc")));
+        QVERIFY(!mountImageMatches(QStringLiteral("/proc"), QStringLiteral("/missing/image.dwarfs")));
+        QTemporaryDir plain;
+        QVERIFY(!mountImageMatches(plain.path(), QStringLiteral("proc")));
+    }
+
+    void concurrentProbesKeepTheirOwnChildrenAndLeaveQProcessAlone()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        // A separate QProcess child must remain available to its owning
+        // QProcess while many threads simultaneously create/reap probe children.
+        QProcess unrelated;
+        unrelated.start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), QStringLiteral("sleep 0.1; exit 37")});
+        QVERIFY(unrelated.waitForStarted(3000));
+        const auto gate = std::make_shared<QSemaphore>();
+        std::vector<std::future<bool>> results;
+        for (int thread = 0; thread < 8; ++thread) {
+            results.push_back(std::async(std::launch::async, [gate, path = tmp.path()] {
+                gate->acquire();
+                for (int call = 0; call < 8; ++call)
+                    if (probeMountLiveness(path) != MountLiveness::Live) return false;
+                return true;
+            }));
+        }
+        gate->release(8);
+        // Collect every future before reporting failures, retaining ownership of
+        // every worker even if one probe reports an unexpected result.
+        bool live = true;
+        for (auto &result : results) live = result.get() && live;
+        QVERIFY(live);
+        QVERIFY(unrelated.waitForFinished(3000));
+        QCOMPARE(unrelated.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(unrelated.exitCode(), 37);
     }
 
     /// A nonexistent path yields Unknown rather than Dead: the daemon (there is

@@ -46,6 +46,7 @@ public:
     void setLoading();
     void setError(const QString &message);
     bool setUsage(const QJsonObject &usage);
+    bool hasUsage() const;
     quint64 totalBytes() const;
     int topLevelCount() const;
     QSize sizeHint() const override;

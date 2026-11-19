@@ -10,12 +10,12 @@
 #include <QPointer>
 #include <QStringList>
 
-#include <functional>
 
 class QAction;
 class CompressionOverviewWidget;
 class ContentRingsWidget;
 class ElidingLabel;
+class ImageBrowserWidget;
 class QFrame;
 class QLabel;
 class KMessageWidget;
@@ -27,6 +27,7 @@ class QTabWidget;
 
 namespace dwarfsplugin {
 class DwarfsctlJob;
+class BackendReadRetry;
 }
 
 class DwarfsManagerWindow final : public QMainWindow {
@@ -43,10 +44,14 @@ private Q_SLOTS:
     void refreshImages();
     void forgetCurrentImage();
     void clearRecentImages();
+    void locateImage();
+    void showImageInFolder();
     void showImageContextMenu(const QPoint &position);
     void mountOrUnmount();
     void browseImage();
     void extractImage();
+    void extractSelected();
+    void openImageFile(const QString &innerPath);
     void verifyImage();
     void checksums();
     void showSettings();
@@ -54,6 +59,8 @@ private Q_SLOTS:
 
 private:
     QString currentImage() const;
+    void startExtraction(const QStringList &paths);
+    void loadFileBrowser();
     void addImage(const QString &path, bool select = true);
     void rememberImage(const QString &path);
     QStringList rememberedImages() const;
@@ -65,10 +72,8 @@ private:
     void showInlineError(const QString &message);
     void setBusy(bool busy, const QString &message = {});
     void updateActions();
-    void runImageJob(const QString &title,
-                     const QStringList &arguments,
-                     int timeout,
-                     const std::function<void(const dwarfsplugin::Envelope &)> &onSuccess);
+    void showUnavailableImage();
+
 
     QListWidget *m_images = nullptr;
     QStackedWidget *m_pages = nullptr;
@@ -90,6 +95,7 @@ private:
     QTabWidget *m_imageViews = nullptr;
     CompressionOverviewWidget *m_compressionOverview = nullptr;
     ContentRingsWidget *m_contentRings = nullptr;
+    ImageBrowserWidget *m_fileBrowser = nullptr;
     KMessageWidget *m_error = nullptr;
     QProgressBar *m_progress = nullptr;
     QPushButton *m_primaryButton = nullptr;
@@ -97,16 +103,32 @@ private:
     QAction *m_mountAction = nullptr;
     QAction *m_browseAction = nullptr;
     QAction *m_extractAction = nullptr;
+    QAction *m_extractSelectedAction = nullptr;
     QAction *m_verifyAction = nullptr;
     QAction *m_checksumAction = nullptr;
     QAction *m_forgetAction = nullptr;
     QAction *m_clearRecentAction = nullptr;
+    QAction *m_locateAction = nullptr;
+    QAction *m_showSourceAction = nullptr;
+    QStringList m_sessionImages;
+    QStringList m_lastHistory;
+    QWidget *m_unavailablePage = nullptr;
+    QLabel *m_unavailableTitle = nullptr;
+    QLabel *m_unavailableMessage = nullptr;
     dwarfsplugin::StatusDetails m_currentStatus;
     dwarfsplugin::Envelope m_currentEnvelope;
+    dwarfsplugin::BackendReadRetry *m_statusRetry = nullptr;
+    dwarfsplugin::BackendReadRetry *m_usageRetry = nullptr;
+    quint64 m_statusGeneration = 0;
+    quint64 m_usageGeneration = 0;
     QPointer<dwarfsplugin::DwarfsctlJob> m_statusJob;
     QPointer<dwarfsplugin::DwarfsctlJob> m_usageJob;
+    QString m_readIntentPath;
     QString m_statusPath;
     QString m_usageIdentity;
+    QString m_usagePath;
     QString m_loadedUsageIdentity;
     bool m_busy = false;
+    bool m_operationBusy = false;
+    QString m_operationMessage;
 };

@@ -3,7 +3,7 @@
 
 #include "trayagentjob.h"
 
-#include <QDBusInterface>
+#include <QDBusMessage>
 #include <QDBusPendingCall>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
@@ -11,69 +11,65 @@
 #include <QDBusConnection>
 #include <QTimer>
 #include <QJsonObject>
+#include <KLocalizedString>
 
 #include "traydbus.h"
 
 using namespace dwarfsplugin;
 
+static QString unknownOutcomeMessage()
+{
+    return i18n("The mount service did not reply in time. The operation may still complete. Check the current mount state before trying again.");
+}
+
 TrayAgentJob::TrayAgentJob(Request req, QObject* parent)
     : KJob(parent)
     , m_req(std::move(req))
 {
-    setCapabilities(KJob::Killable);
+    // The server has no cancellation API. Stopping observation cannot cancel
+    // an already dispatched mount operation, so never advertise cancellation.
 }
 
 TrayAgentJob::~TrayAgentJob()
 {
 }
 
-bool TrayAgentJob::doKill()
+void TrayAgentJob::finish()
 {
-    m_killed = true;
+    if (m_finished) return;
+    m_finished = true;
     if (m_watcher) {
-        // QDBusPendingCall has no true cancel; ignore result when it arrives.
+        m_watcher->disconnect(this);
         m_watcher->deleteLater();
         m_watcher = nullptr;
     }
-    setError(KJob::KilledJobError);
-    setErrorText(QStringLiteral("Cancelled"));
     emitResult();
-    return true;
 }
 
 void TrayAgentJob::start()
 {
-    using dwarfsplugin::ensureTrayRunning;
-
-    ensureTrayRunning();
-
-    auto bus = QDBusConnection::sessionBus();
-    QDBusInterface iface(QString::fromLatin1(dwarfsplugin::kTrayDbusService),
-                         QString::fromLatin1(dwarfsplugin::kMountsDbusPath),
-                         QString::fromLatin1(dwarfsplugin::kMountsDbusInterface),
-                         bus);
-
-    if (!iface.isValid()) {
-        finishWithError(QStringLiteral("Tray D-Bus interface not available"), QStringLiteral("dbus"));
-        return;
-    }
-
-    const QDBusPendingCall call = iface.asyncCallWithArgumentList(m_req.method, m_req.args);
-    auto* watcher = new QDBusPendingCallWatcher(call, this);
+    if (m_finished) return;
+    auto message = QDBusMessage::createMethodCall(
+        QString::fromLatin1(kTrayDbusService), QString::fromLatin1(kMountsDbusPath),
+        QString::fromLatin1(kMountsDbusInterface), m_req.method);
+    message.setArguments(m_req.args);
+    // The bus activates the service while this request remains asynchronous.
+    const auto call = QDBusConnection::sessionBus().asyncCall(message, m_req.timeout_ms > 0 ? m_req.timeout_ms : -1);
+    auto *watcher = new QDBusPendingCallWatcher(call, this);
     m_watcher = watcher;
 
     // Timeout: treat as failure (avoid hanging Dolphin UI indefinitely).
     if (m_req.timeout_ms > 0) {
         QTimer::singleShot(m_req.timeout_ms, this, [this]() {
-            if (m_killed || !m_watcher) {
+            if (m_finished || !m_watcher) {
                 return;
             }
-            finishWithError(QStringLiteral("Operation timed out"), QStringLiteral("timeout"));
+            finishWithError(unknownOutcomeMessage(), QStringLiteral("timeout"));
         });
     }
 
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* w) {
-        if (m_killed) {
+        if (m_finished) {
             if (w) {
                 w->deleteLater();
             }
@@ -86,7 +82,11 @@ void TrayAgentJob::start()
 
         if (reply.isError()) {
             const QDBusError e = reply.error();
-            finishWithError(e.message().isEmpty() ? QStringLiteral("D-Bus call failed") : e.message(),
+            if (e.type() == QDBusError::NoReply || e.type() == QDBusError::Timeout || e.type() == QDBusError::TimedOut) {
+                finishWithError(unknownOutcomeMessage(), QStringLiteral("timeout"), e.name());
+                return;
+            }
+            finishWithError(e.message().isEmpty() ? i18n("The mount service could not complete the request.") : e.message(),
                             QStringLiteral("dbus"),
                             e.name());
             return;
@@ -98,6 +98,7 @@ void TrayAgentJob::start()
 
 void TrayAgentJob::finishWithError(const QString& msg, const QString& kind, const QString& name)
 {
+    if (m_finished) return;
     m_env.ok = false;
     m_env.command = QStringLiteral("dbus:%1").arg(m_req.method);
     m_env.has_error = true;
@@ -109,29 +110,30 @@ void TrayAgentJob::finishWithError(const QString& msg, const QString& kind, cons
         m_env.details.insert(QStringLiteral("dbus_error_name"), name);
     }
 
-    setError(1);
+    setError(KJob::UserDefinedError);
     setErrorText(msg);
-    emitResult();
+    finish();
 }
 
 void TrayAgentJob::finishFromJson(const QString& json)
 {
+    if (m_finished) return;
     const QByteArray bytes = json.toUtf8();
     const auto pr = dwarfsplugin::parseEnvelope(bytes);
     if (!pr.parsed) {
-        finishWithError(QStringLiteral("failed to parse tray JSON envelope: %1").arg(pr.error_message),
+        finishWithError(i18n("The mount service returned an invalid response: %1", pr.error_message),
                         QStringLiteral("parse"));
         return;
     }
     m_env = pr.envelope;
     if (!m_env.ok) {
         const QString msg = !m_env.error.message.isEmpty() ? m_env.error.message
-                                                          : QStringLiteral("Operation failed");
-        setError(1);
+                                                          : i18n("The operation failed.");
+        setError(KJob::UserDefinedError);
         setErrorText(msg);
-        emitResult();
+        finish();
         return;
     }
     setError(0);
-    emitResult();
+    finish();
 }

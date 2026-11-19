@@ -4,6 +4,7 @@
 #include "mount_liveness.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -12,6 +13,11 @@
 
 #include <cerrno>
 #include <csignal>
+#include <mutex>
+#include <set>
+#include <map>
+#include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/wait.h>
@@ -28,116 +34,71 @@ QString unescapeMountinfoField(QString s)
     return s;
 }
 
+namespace {
+struct KernelMount { QString id, point, source; };
+struct KernelTable { bool complete = false; QList<KernelMount> mounts; };
+KernelTable readKernelTable(const QString &path, bool mountinfo)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    const auto bytes = file.readAll();
+    if (file.error() != QFile::NoError || bytes.isEmpty() || !bytes.endsWith('\n')) return {};
+    KernelTable table;
+    for (const auto &line : bytes.split('\n')) {
+        if (line.isEmpty()) continue;
+        const auto fields = QString::fromUtf8(line).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (mountinfo) {
+            const int separator = fields.indexOf(QStringLiteral("-"));
+            bool validId = false;
+            if (fields.size() < 10 || separator < 6 || separator + 3 >= fields.size()
+                || fields[0].toLongLong(&validId) <= 0 || !validId) return {};
+            table.mounts.append({fields[0], unescapeMountinfoField(fields[4]), unescapeMountinfoField(fields[separator + 2])});
+        } else {
+            if (fields.size() < 6) return {};
+            table.mounts.append({{}, unescapeMountinfoField(fields[1]), unescapeMountinfoField(fields[0])});
+        }
+    }
+    table.complete = !table.mounts.isEmpty();
+    return table;
+}
+KernelTable kernelTable()
+{
+    auto table = readKernelTable(QStringLiteral("/proc/self/mountinfo"), true);
+    if (!table.complete) table = readKernelTable(QStringLiteral("/proc/self/mounts"), false);
+    return table;
+}
+}
+
+MountObservation observeMount(const QString &mountpoint)
+{
+    if (mountpoint.isEmpty()) return {};
+    const auto table = kernelTable();
+    if (!table.complete) return {};
+    const auto wanted = QDir::cleanPath(QFileInfo(mountpoint).absoluteFilePath());
+    const auto find = [&table](const QString &path) -> MountObservation {
+        for (const auto &mount : table.mounts)
+            if (QDir::cleanPath(mount.point) == path) return {MountPresence::Present, mount.source};
+        return {MountPresence::Absent, {}};
+    };
+    auto observed = find(wanted);
+    if (observed.presence == MountPresence::Present) return observed;
+    int error = 0;
+    const auto canonical = boundedCanonicalFilePath(wanted, &error);
+    if (!canonical.isEmpty()) return find(canonical);
+    if (error == ENOENT || error == ENOTDIR) return {MountPresence::Absent, {}};
+    return {};
+}
+
 bool isMounted(const QString& mountpoint)
 {
-    // Prefer a raw cleaned path match first, then fall back to canonical path
-    // comparison when available.
-    //
-    // Rationale:
-    // - Canonicalization may differ across systems (/run vs /var/run)
-    // - canonicalPath() can return empty in edge cases
-    const auto mpWantClean = QDir::cleanPath(mountpoint);
-    // canonicalFilePath() can be empty in edge cases; treat it as a best-effort fallback.
-    const auto mpWantCanon = QFileInfo(mpWantClean).canonicalFilePath();
+    return observeMount(mountpoint).presence == MountPresence::Present;
+}
 
-    auto isMountPointByStat = [](const QString& path) -> bool {
-        if (path.isEmpty())
-            return false;
-        const QFileInfo fi(path);
-        if (!fi.exists() || !fi.isDir())
-            return false;
-        const QFileInfo parentFi(fi.dir().absolutePath());
-        if (!parentFi.exists())
-            return false;
-
-        struct stat stMp {};
-        struct stat stParent {};
-        const auto mpBytes = QFile::encodeName(fi.absoluteFilePath());
-        const auto parentBytes = QFile::encodeName(parentFi.absoluteFilePath());
-        if (::stat(mpBytes.constData(), &stMp) != 0)
-            return false;
-        if (::stat(parentBytes.constData(), &stParent) != 0)
-            return false;
-
-        // Standard mount-point heuristic: different device OR same inode as parent (root).
-        return (stMp.st_dev != stParent.st_dev) || (stMp.st_ino == stParent.st_ino);
-    };
-
-    auto matchMountpoint = [&](const QString& mpRaw) -> bool {
-        const auto mp = unescapeMountinfoField(mpRaw);
-        const auto mpClean = QDir::cleanPath(mp);
-        if (mpClean == mpWantClean)
-            return true;
-        if (!mpWantCanon.isEmpty()) {
-            const auto mpCanon = QFileInfo(mpClean).canonicalFilePath();
-            if (!mpCanon.isEmpty() && mpCanon == mpWantCanon)
-                return true;
-        }
-        return false;
-    };
-
-    // Primary: /proc/self/mountinfo.
-    //
-    // The contents are read in one call and split, never line by line behind an
-    // `atEnd()` gate. That gate is wrong here in a way nothing else reveals:
-    // procfs reports st_size == 0 for every file, and QFile::atEnd() decides end
-    // of data from that reported size, so an atEnd()-gated loop over
-    // /proc/self/mountinfo reads zero lines -- and every path, including "/",
-    // answered "not mounted" no matter what the table said. End of data is
-    // decided by the read itself; the C++ reader in cpp/cli/diagnostics.cpp
-    // follows the same rule.
-    QFile f(QStringLiteral("/proc/self/mountinfo"));
-    if (f.open(QIODevice::ReadOnly)) {
-        const auto table = f.readAll();
-        const auto lines = table.split('\n');
-        for (const auto& rawLine : lines) {
-            const auto line = QString::fromUtf8(rawLine).trimmed();
-            if (line.isEmpty())
-                continue;
-            const auto parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-            if (parts.size() < 10)
-                continue;
-            if (!matchMountpoint(parts.value(4)))
-                continue;
-
-            // The mountpoint matched, so it is in the mount table. The
-            // filesystem type is deliberately not used to decide this: a dwarfs
-            // image can be mounted through different FUSE drivers across
-            // versions, and a mismatch there must not read as "not mounted".
-            // Callers that need the type read it from status, which reports it.
-            //
-            // This says nothing about whether the mount still works. A dead FUSE
-            // daemon leaves its table entry behind, so a caller deciding whether
-            // a path is usable must use mountsUsable() instead.
-            return true;
-        }
-
-        // If mountinfo is readable and we didn't find it, it isn't mounted.
-        return false;
-    }
-
-    // Fallback 1: /proc/self/mounts. Same rule: the read decides the end of the
-    // data, never the size the kernel reports.
-    QFile f2(QStringLiteral("/proc/self/mounts"));
-    if (f2.open(QIODevice::ReadOnly)) {
-        const auto table = f2.readAll();
-        const auto lines = table.split('\n');
-        for (const auto& rawLine : lines) {
-            const auto line = QString::fromUtf8(rawLine).trimmed();
-            if (line.isEmpty())
-                continue;
-            const auto parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-            if (parts.size() < 3)
-                continue;
-            if (matchMountpoint(parts.value(1)))
-                return true;
-        }
-
-        return false;
-    }
-
-    // Fallback 2: stat() heuristic.
-    return isMountPointByStat(mpWantClean);
+bool mountImageMatches(const QString& mountpoint, const QString& image)
+{
+    const auto observed = observeMount(mountpoint);
+    return !image.isEmpty() && observed.presence == MountPresence::Present
+        && QDir::cleanPath(observed.source) == QDir::cleanPath(image);
 }
 
 MountLiveness classifyStatfsResult(int rc, int err)
@@ -178,71 +139,241 @@ QString mountLivenessName(MountLiveness liveness)
     return QStringLiteral("unknown");
 }
 
+namespace {
+// Active and deferred children share one bounded budget. An unresolved request
+// for the same path is reused, so repeated refreshes cannot add blocked children.
+struct DeferredProbes {
+    std::mutex mutex;
+    std::map<pid_t, QString> children;
+    std::set<QString> admitted;
+};
+DeferredProbes &deferredProbes()
+{
+    static DeferredProbes probes;
+    return probes;
+}
+QString probeKey(const QString &path)
+{
+    // Kernel mount IDs distinguish replacement volumes at the same directory.
+    // Descendants of one stalled mount share admission even across operations.
+    QFile table(QStringLiteral("/proc/self/mountinfo"));
+    QString key = QDir::cleanPath(path);
+    qsizetype longest = -1;
+    if (table.open(QIODevice::ReadOnly)) {
+        for (const auto &line : table.readAll().split('\n')) {
+            const auto fields = QString::fromUtf8(line).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (fields.size() < 5) continue;
+            const auto point = unescapeMountinfoField(fields[4]);
+            if ((path == point || path.startsWith(point == QLatin1String("/") ? point : point + QLatin1Char('/')))
+                && point.size() > longest) {
+                longest = point.size();
+                // A lexical alias outside a FUSE mount can resolve into one.
+                // Avoid assigning that unresolved alias to the entire ordinary
+                // parent filesystem and suppressing its unrelated healthy paths.
+                const int separator = fields.indexOf(QStringLiteral("-"));
+                key = separator >= 0 && separator + 1 < fields.size()
+                    && fields[separator + 1].startsWith(QLatin1String("fuse"))
+                    ? QStringLiteral("mount:") + fields[0] : QDir::cleanPath(path);
+            }
+        }
+    }
+    return key;
+}
+bool admitProbe(const QString &key, bool *unresolved = nullptr)
+{
+    if (unresolved) *unresolved = false;
+    auto &probes = deferredProbes();
+    QElapsedTimer timer;
+    timer.start();
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(probes.mutex);
+            bool pending = false;
+            for (auto it = probes.children.begin(); it != probes.children.end();) {
+                const auto result = ::waitpid(it->first, nullptr, WNOHANG);
+                if (result == it->first || (result < 0 && errno == ECHILD)) {
+                    probes.admitted.erase(it->second);
+                    it = probes.children.erase(it);
+                } else {
+                    if (it->second == key) pending = true;
+                    ++it;
+                }
+            }
+            if (pending) { if (unresolved) *unresolved = true; return false; }
+            if (probes.admitted.size() < 4 && !probes.admitted.count(key)) {
+                probes.admitted.insert(key);
+                return true;
+            }
+            if (probes.children.size() >= 4) return false;
+        }
+        // Brief active probes can finish and release admission. Waiting for
+        // admission is bounded too; no caller can create an unbounded queue.
+        if (timer.elapsed() >= kMountLivenessProbeTimeoutMs + kMountLivenessReapGraceMs) return false;
+        QThread::msleep(5);
+    }
+}
+void finishProbe(const QString &key, pid_t deferred = 0)
+{
+    auto &probes = deferredProbes();
+    std::lock_guard<std::mutex> lock(probes.mutex);
+    if (deferred > 0) probes.children.emplace(deferred, key);
+    else probes.admitted.erase(key);
+}
+// The caller exclusively owns pid until it transfers it to the deferred set.
+// Monotonic time bounds both the request and post-SIGKILL collection.
+bool awaitProbe(pid_t pid, int &status, bool &deferred)
+{
+    deferred = false;
+    QElapsedTimer timer;
+    timer.start();
+    bool killed = false;
+    for (;;) {
+        const auto result = ::waitpid(pid, &status, WNOHANG);
+        if (result == pid) return !killed;
+        if (result < 0 && errno != EINTR) return false;
+        if (!killed && timer.elapsed() >= kMountLivenessProbeTimeoutMs) {
+            ::kill(pid, SIGKILL);
+            killed = true;
+            timer.restart();
+        } else if (killed && timer.elapsed() >= kMountLivenessReapGraceMs) {
+            deferred = true;
+            return false;
+        }
+        QThread::msleep(5);
+    }
+}
+}
+
+QString boundedCanonicalFilePath(const QString &path, int *error)
+{
+    if (error) *error = EAGAIN;
+    if (path.isEmpty()) return {};
+    const auto key = probeKey(path);
+    if (!admitProbe(key)) return {};
+    const auto encoded = QFile::encodeName(path);
+    int pipes[2];
+    if (::pipe2(pipes, O_CLOEXEC | O_NONBLOCK) != 0) { finishProbe(key); return {}; }
+    const auto pid = ::fork();
+    if (pid == 0) {
+        // Only syscalls and stack operations after fork. O_PATH follows aliases
+        // without opening file contents; procfs reports the resolved kernel path.
+        ::close(pipes[0]);
+        const int fd = ::open(encoded.constData(), O_PATH | O_CLOEXEC);
+        if (fd < 0) { const int failure = errno; (void)::write(pipes[1], &failure, sizeof(failure)); ::_exit(1); }
+        char link[64] = "/proc/self/fd/";
+        char digits[16]; int n = 0, value = fd;
+        do { digits[n++] = char('0' + value % 10); value /= 10; } while (value);
+        int at = 14;
+        while (n) link[at++] = digits[--n];
+        link[at] = '\0';
+        char resolved[PATH_MAX];
+        const auto size = ::readlink(link, resolved, sizeof(resolved));
+        const int failure = size > 0 && size < PATH_MAX ? 0 : errno;
+        (void)::write(pipes[1], &failure, sizeof(failure));
+        if (size > 0 && size < PATH_MAX) (void)::write(pipes[1], resolved, size);
+        ::_exit(0);
+    }
+    ::close(pipes[1]);
+    if (pid < 0) { ::close(pipes[0]); finishProbe(key); return {}; }
+    int status = 0; bool deferred = false;
+    const bool finished = awaitProbe(pid, status, deferred);
+    char resolved[PATH_MAX];
+    int failure = EAGAIN;
+    const bool received = finished && ::read(pipes[0], &failure, sizeof(failure)) == sizeof(failure);
+    const auto size = received && failure == 0 ? ::read(pipes[0], resolved, sizeof(resolved)) : -1;
+    if (error) *error = size > 0 ? 0 : failure == 0 ? EAGAIN : failure;
+    ::close(pipes[0]);
+    finishProbe(key, deferred ? pid : 0);
+    return size > 0 ? QFile::decodeName(QByteArray(resolved, size)) : QString{};
+}
+
+QByteArray boundedRegularFileRead(const QString &path, int maximumBytes)
+{
+    if (path.isEmpty() || maximumBytes <= 0 || maximumBytes > 4096) return {};
+    const auto key = probeKey(path);
+    if (!admitProbe(key)) return {};
+    const auto encoded = QFile::encodeName(path);
+    int pipes[2];
+    if (::pipe2(pipes, O_CLOEXEC | O_NONBLOCK) != 0) { finishProbe(key); return {}; }
+    const auto pid = ::fork();
+    if (pid == 0) {
+        ::close(pipes[0]);
+        const int fd = ::open(encoded.constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) ::_exit(1);
+        struct stat info {};
+        if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size > maximumBytes) ::_exit(1);
+        char bytes[4097]; int used = 0;
+        for (;;) {
+            const auto count = ::read(fd, bytes + used, maximumBytes + 1 - used);
+            if (count < 0) { if (errno == EINTR) continue; ::_exit(1); }
+            if (!count) break;
+            used += count;
+            if (used > maximumBytes) ::_exit(1);
+        }
+        if (used) (void)::write(pipes[1], bytes, used);
+        ::_exit(0);
+    }
+    ::close(pipes[1]);
+    if (pid < 0) { ::close(pipes[0]); finishProbe(key); return {}; }
+    int status = 0; bool deferred = false;
+    const bool finished = awaitProbe(pid, status, deferred);
+    char bytes[4096];
+    const auto size = finished ? ::read(pipes[0], bytes, maximumBytes) : -1;
+    ::close(pipes[0]); finishProbe(key, deferred ? pid : 0);
+    return size > 0 ? QByteArray(bytes, size) : QByteArray{};
+}
+
+bool boundedFileStat(const QString &path, struct stat *result, int *error)
+{
+    if (error) *error = EAGAIN;
+    if (path.isEmpty() || !result) return false;
+    const auto key = probeKey(path);
+    if (!admitProbe(key)) return false;
+    const auto encoded = QFile::encodeName(path);
+    int pipes[2];
+    if (::pipe2(pipes, O_CLOEXEC | O_NONBLOCK) != 0) { finishProbe(key); return false; }
+    const auto pid = ::fork();
+    if (pid == 0) {
+        ::close(pipes[0]);
+        struct stat value {};
+        const int rc = ::stat(encoded.constData(), &value);
+        const int statError = rc == 0 ? 0 : errno;
+        (void)::write(pipes[1], &statError, sizeof(statError));
+        if (rc == 0) (void)::write(pipes[1], &value, sizeof(value));
+        ::_exit(0);
+    }
+    ::close(pipes[1]);
+    if (pid < 0) { ::close(pipes[0]); finishProbe(key); return false; }
+    int status = 0; bool deferred = false;
+    const bool finished = awaitProbe(pid, status, deferred);
+    int statError = EAGAIN;
+    const bool received = finished && ::read(pipes[0], &statError, sizeof(statError)) == sizeof(statError);
+    const auto size = received && statError == 0 ? ::read(pipes[0], result, sizeof(*result)) : -1;
+    if (error) *error = received ? statError : EAGAIN;
+    ::close(pipes[0]);
+    finishProbe(key, deferred ? pid : 0);
+    return size == sizeof(*result);
+}
+
 MountLiveness probeMountLiveness(const QString& mountpoint)
 {
-    // The pid of a previous probe that could not be reaped while it was blocked
-    // in the kernel. Tracked explicitly so the reap below can never collect a
-    // child belonging to someone else -- `waitpid(-1)` would sit on QProcess
-    // children too, which the tray starts elsewhere in this same process.
-    static pid_t s_unreapedProbePid = -1;
-
-    if (mountpoint.isEmpty())
-        return MountLiveness::Unknown;
-
-    if (s_unreapedProbePid > 0) {
-        const pid_t r = ::waitpid(s_unreapedProbePid, nullptr, WNOHANG);
-        if (r == s_unreapedProbePid || r < 0)
-            s_unreapedProbePid = -1;
-    }
-
+    if (mountpoint.isEmpty()) return MountLiveness::Unknown;
+    const auto key = probeKey(mountpoint);
+    bool unresolved = false;
+    if (!admitProbe(key, &unresolved)) return unresolved ? MountLiveness::Unresponsive : MountLiveness::Unknown;
     const QByteArray path = QFile::encodeName(mountpoint);
-
     const pid_t pid = ::fork();
-    if (pid < 0)
-        return MountLiveness::Unknown;
-
+    if (pid < 0) { finishProbe(key); return MountLiveness::Unknown; }
     if (pid == 0) {
-        // Child. Only async-signal-safe calls after fork in a process that has
-        // threads -- a raw syscall and _exit(), nothing else. _exit rather than
-        // exit() so no Qt atexit handler runs here.
         struct statfs st {};
         const int rc = ::statfs(path.constData(), &st);
         ::_exit(rc == 0 ? 0 : (errno & 0xff));
     }
-
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + kMountLivenessProbeTimeoutMs;
-    int status = 0;
-    for (;;) {
-        const pid_t r = ::waitpid(pid, &status, WNOHANG);
-        if (r == pid)
-            break;
-        if (r < 0)
-            return MountLiveness::Unknown;
-        if (QDateTime::currentMSecsSinceEpoch() >= deadline) {
-            ::kill(pid, SIGKILL);
-            // Bounded reap. A child blocked in the kernel cannot die until its
-            // request returns, and the probe must answer promptly regardless;
-            // whatever is left is collected at the top of the next probe.
-            const qint64 reapDeadline = QDateTime::currentMSecsSinceEpoch() + kMountLivenessReapGraceMs;
-            for (;;) {
-                const pid_t r2 = ::waitpid(pid, &status, WNOHANG);
-                if (r2 == pid || r2 < 0)
-                    break;
-                if (QDateTime::currentMSecsSinceEpoch() >= reapDeadline) {
-                    s_unreapedProbePid = pid;
-                    break;
-                }
-                QThread::msleep(5);
-            }
-            return MountLiveness::Unresponsive;
-        }
-        QThread::msleep(5);
-    }
-
-    if (!WIFEXITED(status))
-        return MountLiveness::Unknown;
-    // The child encodes the raw errno in its exit status; 0 means statfs()
-    // succeeded, so the daemon served the request.
+    int status = 0; bool deferred = false;
+    const bool finished = awaitProbe(pid, status, deferred);
+    finishProbe(key, deferred ? pid : 0);
+    if (!finished) return MountLiveness::Unresponsive;
+    if (!WIFEXITED(status)) return MountLiveness::Unknown;
     const int err = WEXITSTATUS(status);
     return classifyStatfsResult(err == 0 ? 0 : -1, err);
 }

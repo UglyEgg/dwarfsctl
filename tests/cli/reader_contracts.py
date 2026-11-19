@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from selected_extract_contracts import check_selected_extraction
 
 cli, reader, mkdwarfs, dwarfsck = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
 with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
@@ -57,6 +58,8 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
     assert run("ls", image, "--path", "/sub", "--children-only")["details"]["entries"] == [paths["/sub/[abc].bin"]]
     assert run("ls", image, "--path", "/empty", "--entry-only")["details"]["entries"] == [paths["/empty"]]
     run("ls", image, "--path", "/missing", "--entry-only", ok=False)
+    run("ls", image, "--path", "/missing", "--children-only", ok=False)
+    run("ls", image, "--path", "/hello.txt", "--children-only", ok=False)
     peek = run("peek", image)["details"]
     assert peek["counts"]["directories"] == 1
     reference = json.loads(subprocess.check_output([dwarfsck, "--json", "-d", "metadata_summary,directory_tree", "-i", str(image)]))
@@ -134,6 +137,7 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
     run("extract", empty_image, empty_dest)
     assert empty_dest.is_dir()
     assert list(empty_dest.iterdir()) == []
+    check_selected_extraction(root, run, mkdwarfs, cli, config, env)
     # Discovery from an installed prefix works without an environment override.
     prefix = root / "prefix"
     (prefix / "bin").mkdir(parents=True)
@@ -146,4 +150,4 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
                                env=install_env, capture_output=True)
     assert installed.returncode == 0, installed.stdout
     assert json.loads(installed.stdout)["details"]["entries"] == full
-print("reader integration passed: listing, preview, exact/large/empty reads, publication, extraction, links, errors, installed discovery")
+print("reader integration passed: listing, preview, exact/large/empty reads, publication, full/selected extraction, literal paths, empty directories, links, races, cancellation, errors, installed discovery")

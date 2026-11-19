@@ -101,25 +101,42 @@ if grep -F "mount_ops::" "$cli_app" >/dev/null || grep -F "mountinfo::" "$cli_ap
   exit 1
 fi
 
-# Ensure tray does not shell out to dwarfsctl for mount control (prevents recursion and split-brain)
-tray_src="$root/kde/tray/src"
+# Check execution arguments, not JSON command names in service responses.
+# The tray legitimately returns envelopes with command="mount" or "status".
+python3 - "$root/kde/tray/src" <<'PYEOF'
+import pathlib, re, sys
 
-# We allow the word 'dwarfsctl' in About/version text and in docs, but tray must not invoke dwarfsctl with mount/unmount/status/list.
-# Fail if any non-mount-executor source file contains both 'dwarfsctl' and a CLI verb token.
-bad_tray=$(grep -RIn --include='*.cpp' --include='*.h' -E 'dwarfsctl' "$tray_src"   | grep -v 'mount_executor\.'   | cut -d: -f1 | sort -u || true)
+calls = re.compile(r"(?:\brunDwarfsctl|\brunTool|DwarfsctlRunner::run|\b\w+\.(?:start|startDetached|setArguments))\s*\(")
+verbs = {"mount", "unmount", "status", "list"}
+def violations(text):
+    found = []
+    for call in calls.finditer(text):
+        depth, quote, escaped = 1, None, False
+        end = call.end()
+        while end < len(text) and depth:
+            char = text[end]
+            if quote:
+                if escaped: escaped = False
+                elif char == "\\": escaped = True
+                elif char == quote: quote = None
+            elif char in ('"', "'"): quote = char
+            elif char == "(": depth += 1
+            elif char == ")": depth -= 1
+            end += 1
+        tokens = re.findall(r'QStringLiteral\("([a-z-]+)"\)', text[call.end():end])
+        # Only the command position is meaningful: config ... list is valid.
+        if tokens and tokens[0] == "dwarfsctl": tokens.pop(0)
+        command = next((token for token in tokens if not token.startswith("--")), None)
+        if command in verbs: found.append(text.count("\n", 0, call.start()) + 1)
+    return found
 
-if [[ -n "$bad_tray" ]]; then
-  # For each file that references dwarfsctl, ensure it does not also contain verb literals.
-  while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
-    if grep -E 'QStringLiteral\("(mount|unmount|status)"\)' "$f" >/dev/null; then
-      echo "ERROR: tray source invokes dwarfsctl and contains mount-control verb literals: $f" >&2
-      exit 1
-    fi
-    if grep -E 'QStringLiteral\("mount"\).*QStringLiteral\("list"\)' "$f" >/dev/null; then
-      echo "ERROR: tray source contains dwarfsctl mount list invocation: $f" >&2
-      exit 1
-    fi
-  done <<< "$bad_tray"
-fi
-
+assert violations('runDwarfsctl({QStringLiteral("mount"), image}, true);')
+assert violations('p.start(dwarfsctlExe(), {QStringLiteral("status"), image});')
+assert not violations('executorBusyReply(QStringLiteral("mount"), image);')
+assert not violations('runDwarfsctl({QStringLiteral("config"), QStringLiteral("mkdwarfs-profiles"), QStringLiteral("list")}, true);')
+for path in sorted(pathlib.Path(sys.argv[1]).rglob("*")):
+    if path.suffix not in {".cpp", ".h"} or path.name.startswith("mount_executor."): continue
+    bad = violations(path.read_text())
+    if bad: raise SystemExit(f"tray must use its mount executor, not mount-control CLI arguments: {path}:{bad}")
+print("OK: tray mount control stays in its executor")
+PYEOF

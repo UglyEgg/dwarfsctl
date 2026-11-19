@@ -17,6 +17,14 @@ printf '%s  %s\n' "$sha" "$archive" | sha256sum --check -
 # Require every supported decoder; upstream otherwise silently omits optional ones.
 pkg-config --exists libcrypto libarchive libxxhash libzstd liblz4 liblzma libbrotlidec libbrotlienc flac++
 if [[ ! -d "$build/dwarfs-$version" ]]; then tar -xJf "$archive" -C "$build"; fi
+# Apply our pinned compatibility change strictly; accept an already patched tree.
+compat_patch="$repo/packaging/patches/dwarfs-$version-selected-directories.patch"
+if patch --dry-run --silent --fuzz=0 --forward -p1 -d "$build/dwarfs-$version" < "$compat_patch"; then
+    patch --batch --fuzz=0 --forward -p1 -d "$build/dwarfs-$version" < "$compat_patch"
+elif ! patch --dry-run --silent --fuzz=0 --reverse -p1 -d "$build/dwarfs-$version" < "$compat_patch"; then
+    echo "DwarFS compatibility patch does not match the source tree" >&2
+    exit 1
+fi
 cmake -S "$build/dwarfs-$version" -B "$build/cmake" -G Ninja \
     -DZSTD_STATIC_LIB=OFF -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_PREFIX=/usr -DDWARFSCTL_READER_SOURCE="$repo/cpp/reader" \
@@ -32,6 +40,9 @@ if [[ $# -ge 2 ]]; then
     stage=$(cd -- "$2" && pwd)
     DESTDIR="$stage" cmake --install "$build/cmake" --component dwarfsctl-reader
     python3 "$repo/packaging/reader-notices.py" "$stage"
-    # Ship the exact source used for the embedded libraries and all its notices.
+    # Ship the pinned source archive, compatibility patch, and all notices.
     install -Dm644 "$archive" "$stage/usr/share/dwarfsctl/sources/dwarfs-$version.tar.xz"
+    install -Dm644 "$compat_patch" "$stage/usr/share/dwarfsctl/sources/$(basename "$compat_patch")"
+    install -Dm644 "$repo/packaging/patches/dwarfs-$version-extraction-names.patch" \
+        "$stage/usr/share/dwarfsctl/sources/dwarfs-$version-extraction-names.patch"
 fi

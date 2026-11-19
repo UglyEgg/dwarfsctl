@@ -5,6 +5,7 @@
 #include <KPropertiesDialog>
 
 #include <QFile>
+#include <QLabel>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUrl>
@@ -29,8 +30,9 @@ private Q_SLOTS:
         QVERIFY(backend.open(QIODevice::WriteOnly));
         const QByteArray response =
             "#!/bin/sh\n"
+            "if [ \"$1\" = config ]; then printf '%s\\n' '{\"ok\":true,\"details\":{\"command_timeout_ms\":300000,\"build_timeout_ms\":0,\"open_after_mount\":true}}'; exit; fi\n"
             "printf '%s\\n' '{\"ok\":true,\"command\":\"status\",\"image\":\"sample.dwarfs\","
-            "\"details\":{\"mounted\":false,\"mountpoint\":null},\"warnings\":[],"
+            "\"details\":{\"mounted\":false,\"mountpoint\":null,\"tools\":{\"dwarfsck\":{\"json\":{\"created_by\":\"<b>crafted creator</b>\"}}}},\"warnings\":[],"
             "\"warning_objects\":[],\"error\":null}'\n";
         QCOMPARE(backend.write(response), response.size());
         backend.close();
@@ -44,7 +46,13 @@ private Q_SLOTS:
 
         QVERIFY2(dialog.findChild<QWidget *>(QStringLiteral("dwarfsImagePropertiesPage")),
                  "KF6 did not instantiate the DwarFS Image Properties page");
-        QTest::qWait(100);
+        auto *creator = dialog.findChild<QLabel *>(QStringLiteral("imageCreatedBy"));
+        QVERIFY(creator);
+        QTRY_COMPARE_WITH_TIMEOUT(creator->text(), QStringLiteral("<b>crafted creator</b>"), 5000);
+        QCOMPARE(creator->textFormat(), Qt::PlainText);
+        auto *mountpoint = dialog.findChild<QLabel *>(QStringLiteral("imageMountpoint"));
+        QVERIFY(mountpoint);
+        QCOMPARE(mountpoint->textFormat(), Qt::PlainText);
         if (originalBackend.isNull()) {
             qunsetenv("DWARFSCTL_BIN");
         } else {

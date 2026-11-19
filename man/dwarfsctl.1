@@ -1,4 +1,4 @@
-.TH DWARFSCTL 1 "2026-11-14" "dwarfsctl 0.13.1" "User Commands"
+.TH DWARFSCTL 1 "2026-11-14" "dwarfsctl 0.14.0" "User Commands"
 .SH NAME
 dwarfsctl \- JSON backend and KDE integration for DwarFS images
 .SH SYNOPSIS
@@ -20,7 +20,7 @@ with the DwarFS project.
 Merge this configuration after system and user configuration.
 .TP
 .B --verbose
-Increase diagnostics on standard error.
+Accepted for command-line compatibility; currently has no effect.
 .TP
 .B --help
 Show global help; use COMMAND --help for command arguments.
@@ -34,13 +34,20 @@ Show version and affiliation notice.
 .RB [ --overwrite-output ]
 .RB [ --yes ]
 .RB [ --dry-run ]
+.RB [ --preview ]
 .RI [ --compression " ALGO"]
 .RI [ --mkdwarfs-arg " TOKEN"]
 .PP
-Create an image using the bundled engine. --force permits replacement and
-enables replacement in the engine. --overwrite-output bypasses the backend overwrite
-prompt; --yes answers that prompt affirmatively. --dry-run reports the plan
-without executing it. Repeat --mkdwarfs-arg for individual argv tokens;
+Create an image using the bundled engine. An existing output requires explicit
+replacement permission: --force, --overwrite-output and --yes are aliases for
+the same verified, atomic replacement. --dry-run reports the plan without executing it.
+--preview builds a temporary image, reports its measured size and source-file breakdown,
+then removes it without publishing an output. It can take as long as a normal build.
+The KDE preview retains that measured image only while its result window is open,
+so "Create this image" can publish it without another build. Closing the window
+discards the temporary image. If interrupted by a crash, the next desktop
+preview in the same destination folder reclaims abandoned preview files.
+The two options cannot be combined. Repeat --mkdwarfs-arg for individual argv tokens;
 input/output options are owned by dwarfsctl. --compress aliases --compression.
 .SS mount
 .B mount IMAGE
@@ -75,7 +82,9 @@ Unmount the most recently registered image.
 .B status
 .RI [ IMAGE ]
 .PP
-Inspect dependencies and optionally an image's state.
+Inspect dependencies and optionally an image's metadata and tray-owned mount state.
+Image inspection works without the session service. When mount state cannot be
+confirmed, mount_state_known is false and the optional mounted field is absent.
 .SS doctor
 .B doctor
 .PP
@@ -112,10 +121,19 @@ attributes compressed bytes to individual paths.
 .SS extract
 .B extract IMAGE DEST_DIR
 .RI [ --arg " TOKEN"]
+.RI [ --path " /LITERAL/PATH"]
 .PP
 Extract into a new destination directory. The command refuses an existing path,
 stages the complete result beside it, and publishes only after success. Repeat
---arg for additional extraction options.
+--arg for extraction patterns or supported tuning options (image-offset,
+num-workers, cache-size, log-level, skip-devices and skip-specials). Input/output,
+informational modes, integrity policy and concurrent disk writers are owned by
+dwarfsctl. Repeat --path to extract selected
+files or directories while preserving their archive-relative hierarchy. Paths
+are literal, absolute image paths; directory selections include their descendants
+and empty directories. Overlapping selections are collapsed. Symlinks are
+preserved without following them. Missing paths and dot components are rejected.
+Selected extraction cannot be combined with --arg.
 .SS checksum export
 .B checksum export IMAGE --algo ALGO
 .RI [ --output " FILE"]
@@ -177,7 +195,8 @@ the bundled writer option help.
 .RI [ --cache " on|off"]
 .PP
 Suggest flags from a bounded metadata scan; default goal balanced, cache on.
-No subprocesses, content reads or compression benchmarks are performed.
+The bundled engine validates the suggested compression options.
+The scan does not read file contents or run compression benchmarks.
 The scan inspects at most 20,000 directory entries, descends through 32 levels,
 and samples metadata for the first 512 regular files in sorted depth-first order.
 Symlinks and special files are skipped. An oversized directory's partial
@@ -198,7 +217,7 @@ Cache off neither reads nor writes the recommendation cache.
 Report known tools and supported version metadata.
 .SH CONFIGURATION
 Configuration precedence is built-in defaults, system configuration, user
-configuration, then --config. Paths support environment expansion.
+configuration, then --config.
 KDE reads resolved configuration through the backend.
 .TP
 .I /etc/dwarfs-dolphin/config.toml
@@ -209,13 +228,10 @@ User settings; defaults to ~/.config/dwarfs-dolphin/config.toml.
 .SH ENVIRONMENT
 .TP
 .B HOME, XDG_CONFIG_HOME
-Locate user settings and expand configured paths.
+Locate user settings.
 .TP
 .B XDG_RUNTIME_DIR
 Session runtime storage for mounts and locks.
-.TP
-.B XDG_STATE_HOME
-State fallback when session runtime storage is unavailable.
 .TP
 .B XDG_CACHE_HOME
 Recommendation cache root; defaults to ~/.cache.

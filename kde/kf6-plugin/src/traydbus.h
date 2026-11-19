@@ -4,8 +4,8 @@
 #pragma once
 
 #include <QDBusConnection>
-#include <QDBusConnectionInterface>
-#include <QDBusInterface>
+#include <QDBusMessage>
+#include <QDBusPendingCall>
 #include <QString>
 
 namespace dwarfsplugin {
@@ -19,44 +19,12 @@ static constexpr const char* kTrayDbusInterface = "org.quest.entropy.dwarfsctl.T
 static constexpr const char* kMountsDbusPath = "/org/quest/entropy/dwarfsctl/Mounts";
 static constexpr const char* kMountsDbusInterface = "org.quest.entropy.dwarfsctl.Mounts1";
 
-inline void ensureTrayRunning()
-{
-    // Best-effort. If the tray isn't installed or D-Bus isn't available, do nothing.
-    auto bus = QDBusConnection::sessionBus();
-    auto *iface = bus.interface();
-    if (!iface) {
-        return;
-    }
-
-    (void)iface->startService(QString::fromLatin1(kTrayDbusService));
-
-    // Poke the service so activation completes before we return.
-    QDBusInterface tray(QString::fromLatin1(kTrayDbusService),
-                        QString::fromLatin1(kTrayDbusPath),
-                        QString::fromLatin1(kTrayDbusInterface),
-                        bus);
-    if (tray.isValid()) {
-        tray.call(QStringLiteral("Ping"));
-    }
-}
-
 inline void showTrayAbout()
 {
-    auto bus = QDBusConnection::sessionBus();
-    auto *iface = bus.interface();
-    if (!iface) {
-        return;
-    }
-
-    ensureTrayRunning();
-
-    QDBusInterface tray(QString::fromLatin1(kTrayDbusService),
-                        QString::fromLatin1(kTrayDbusPath),
-                        QString::fromLatin1(kTrayDbusInterface),
-                        bus);
-    if (tray.isValid()) {
-        tray.call(QStringLiteral("ShowAbout"));
-    }
+    const auto message = QDBusMessage::createMethodCall(
+        QString::fromLatin1(kTrayDbusService), QString::fromLatin1(kTrayDbusPath),
+        QString::fromLatin1(kTrayDbusInterface), QStringLiteral("ShowAbout"));
+    QDBusConnection::sessionBus().asyncCall(message);
 }
 
 } // namespace dwarfsplugin

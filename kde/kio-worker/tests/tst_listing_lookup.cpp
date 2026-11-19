@@ -1,27 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Richard Majewski
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Regression tests for review finding F4: every stat() re-listed the entire
-// image.
-//
-// The defect: `stat()` called `listImage()`, so entering an 80-file directory
-// (one listDir plus up to 80 stat calls) cost up to 81 full listings -- measured
-// at ~4 ms each, ~323 ms of repeated work, scaling with directory size. The fix
-// has two halves: a targeted `dwarfsctl ls --path ... --entry-only` lookup for a
-// cold cache, and a process-lifetime listing cache (keyed by the image file's
-// size and mtime) so the stat calls that follow a listDir cost nothing at all.
-//
-// These tests drive a FAKE dwarfsctl -- a shell script planted at DWARFSCTL_BIN
-// that appends its argv to a log file -- so the assertions count real backend
-// invocations instead of trusting the implementation's account of itself. A
-// cache that silently stopped working would fail here, not pass.
-//
-// Ungated: everything runs against a temp directory and a script, so the suite
-// runs anywhere, including CI.
+// A warm unchanged listing serves exact entry lookups without another backend
+// call. Cold lookups request one literal entry; image replacement and cache
+// admission changes must not fabricate an empty success or truncate results.
+// Local fake backends record actual invocations, so these tests need no image
+// tools or installed desktop services.
 
 #include "dwarfsctl_ls.h"
 
 #include <QFile>
+#include <QSaveFile>
+#include <QDateTime>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -111,6 +102,25 @@ private:
     QByteArray m_previous;
 };
 
+QString changingBackend(QTemporaryDir &dir)
+{
+    const auto name = dir.filePath(QStringLiteral("changing-backend.py"));
+    QFile file(name);
+    if (!file.open(QIODevice::WriteOnly)) return {};
+    file.write(R"PY(#!/usr/bin/python3
+import json,os,sys
+from pathlib import Path
+p=Path(sys.argv[-1]);data=p.read_bytes()
+if os.environ.get('DWARFSCTL_TEST_CHANGE_IMAGE')=='1' and data==b'A':
+ s=p.stat();temp=p.with_name(p.name+'.replacement');temp.write_bytes(b'B');os.utime(temp,ns=(s.st_atime_ns,s.st_mtime_ns));os.replace(temp,p)
+name='old.txt' if data==b'A' else 'new.txt'
+print(json.dumps(dict(ok=True,details=dict(entries=[dict(name='',path='/',is_dir=True,size=None,mode=16877),dict(name=name,path='/'+name,is_dir=False,size=1,mode=33188)]))))
+)PY");
+    file.close();
+    if (!QFile::setPermissions(name, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return {};
+    return name;
+}
+
 } // namespace
 
 class ListingLookupTest : public QObject
@@ -118,6 +128,40 @@ class ListingLookupTest : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void sameSizeAndModificationTimeReplacementInvalidatesListing()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const auto backend = changingBackend(root); QVERIFY(!backend.isEmpty()); BackendEnv env(backend);
+        const auto image = root.filePath(QStringLiteral("image.dwarfs"));
+        QFile file(image); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("A"); file.close();
+        QVERIFY(entryAt(listImage(image).entries, QStringLiteral("/old.txt")));
+        const QFileInfo before(image); const auto modified = before.lastModified();
+        QSaveFile replacement(image); QVERIFY(replacement.open(QIODevice::WriteOnly)); replacement.write("B"); QVERIFY(replacement.commit());
+        QVERIFY(file.open(QIODevice::ReadWrite)); QVERIFY(file.setFileTime(modified, QFileDevice::FileModificationTime)); file.close();
+        QCOMPARE(QFileInfo(image).size(), before.size());
+        QCOMPARE(QFileInfo(image).lastModified().toMSecsSinceEpoch(), modified.toMSecsSinceEpoch());
+        const auto current = listImage(image); QVERIFY(current.ok);
+        QVERIFY(entryAt(current.entries, QStringLiteral("/new.txt")));
+        QVERIFY(!entryAt(current.entries, QStringLiteral("/old.txt")));
+    }
+    void changingImageIsNotCachedUnderItsReplacementIdentity()
+    {
+        QTemporaryDir root; QVERIFY(root.isValid());
+        const auto backend = changingBackend(root); QVERIFY(!backend.isEmpty()); BackendEnv env(backend);
+        const auto image = root.filePath(QStringLiteral("image.dwarfs"));
+        QFile file(image); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("A"); file.close();
+        const auto old = qgetenv("DWARFSCTL_TEST_CHANGE_IMAGE");
+        const auto restore = qScopeGuard([old] { if (old.isNull()) qunsetenv("DWARFSCTL_TEST_CHANGE_IMAGE"); else qputenv("DWARFSCTL_TEST_CHANGE_IMAGE", old); });
+        qputenv("DWARFSCTL_TEST_CHANGE_IMAGE", "1");
+        const auto changed = listImage(image);
+        QVERIFY(!changed.ok); QCOMPARE(changed.errorKind, QStringLiteral("SourceChanged"));
+        qunsetenv("DWARFSCTL_TEST_CHANGE_IMAGE");
+        const auto current = listImage(image); QVERIFY(current.ok);
+        QVERIFY(entryAt(current.entries, QStringLiteral("/new.txt")));
+        QVERIFY(!entryAt(current.entries, QStringLiteral("/old.txt")));
+    }
+
     void init()
     {
         // The cache is process-lifetime state; start every case from empty so
@@ -212,6 +256,59 @@ private Q_SLOTS:
         QCOMPARE(missing.errorKind, QStringLiteral("InvalidPath"));
         QVERIFY2(!missing.error.isEmpty(), "the failure must carry a reason");
         QCOMPARE(callCount(log), 1);
+    }
+
+    void switchingImagesEvictsThePreviousListing()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString log = dir.filePath(QStringLiteral("calls.log"));
+        const BackendEnv env(writeFakeBackend(dir, log));
+        const QString first = dir.filePath(QStringLiteral("first.dwarfs"));
+        const QString second = dir.filePath(QStringLiteral("second.dwarfs"));
+        for (const auto &path : {first, second}) { QFile image(path); QVERIFY(image.open(QIODevice::WriteOnly)); image.write("image"); }
+        QVERIFY(listImage(first).ok);
+        QVERIFY(listImage(second).ok);
+        const int before = callCount(log);
+        QVERIFY(lookupEntry(first, QStringLiteral("/hello.txt")).ok);
+        QCOMPARE(callCount(log), before + 1);
+        QVERIFY(lastCall(log).contains(QStringLiteral("--entry-only")));
+    }
+
+    void oversizedListingsRemainCompleteAndAreNotRetained()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString backend = dir.filePath(QStringLiteral("backend"));
+        QFile script(backend);
+        QVERIFY(script.open(QIODevice::WriteOnly));
+        script.write(R"PY(#!/usr/bin/python3
+import json,sys
+image=sys.argv[-1] if '--entry-only' in sys.argv else sys.argv[2]
+with open(image+'.calls','a') as log: log.write('call\n')
+def entry(i):
+ name='entry-%04d'%i
+ return dict(name=name,path='/'+('/'.join(['segment'*32]*40))+'/'+name,is_dir=False,size=i,mode=33188)
+entries=[entry(0)] if '--entry-only' in sys.argv else [entry(i) for i in range(4000)]
+print(json.dumps(dict(ok=True,details=dict(entries=entries))))
+)PY");
+        script.close();
+        QVERIFY(script.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const BackendEnv env(backend);
+        const QString image = dir.filePath(QStringLiteral("wide.dwarfs"));
+        QFile imageFile(image);
+        QVERIFY(imageFile.open(QIODevice::WriteOnly));
+        imageFile.write("image"); imageFile.close();
+        const auto listing = listImage(image);
+        QVERIFY2(listing.ok, qPrintable(listing.error));
+        QCOMPARE(listing.entries.size(), 4000);
+        QCOMPARE(listing.entries.last().name, QStringLiteral("entry-3999"));
+        const auto found = lookupEntry(image, listing.entries.first().path);
+        QVERIFY2(found.ok, qPrintable(found.error));
+        QCOMPARE(found.entries.size(), 1);
+        QFile calls(image + QStringLiteral(".calls"));
+        QVERIFY(calls.open(QIODevice::ReadOnly));
+        QCOMPARE(calls.readAll().count('\n'), 2);
     }
 
     /// A replaced image is a different image: the cache must not answer for it.

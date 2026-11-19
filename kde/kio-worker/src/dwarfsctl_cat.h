@@ -17,6 +17,8 @@
 #include <QString>
 
 #include <functional>
+#include <memory>
+class QTemporaryDir;
 
 namespace DwarfsKio {
 
@@ -30,6 +32,7 @@ struct MaterialisedFile {
     /// Populated when ok is false; the backend's own message, naming the artifact.
     QString error;
     QString errorKind;
+    std::shared_ptr<QTemporaryDir> directory;
 };
 
 /// Result of publishing one image member directly to a local destination.
@@ -66,8 +69,7 @@ void releaseMaterialised(const MaterialisedFile &file);
 ///
 /// `maxBytes` exists because an image can contain a file far larger than anything
 /// a caller wants in RAM at once. Exceeding it is an explicit error rather than a
-/// silent truncation: handing back a partial file while reporting success is the
-/// fabricated-success class this project has already shipped twice.
+/// silent truncation: a successful read must contain the complete file.
 bool readWholeFile(const QString &path, quint64 size, QByteArray *out, quint64 maxBytes);
 
 /// Stream a file in bounded chunks.

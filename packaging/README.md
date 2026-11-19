@@ -10,6 +10,13 @@ Artifacts are written to `build-out/<distribution>/`. The build includes the
 CLI, private engine, Plasma tray, Dolphin extensions, KIO worker, thumbnailer,
 MIME data, icons, configuration, manual, source and license material.
 
+The pinned DwarFS build applies `patches/dwarfs-0.15.7-selected-directories.patch`
+to preserve empty directories during selected extraction. The option defaults
+to upstream behavior and is enabled only by the selected-extraction wrapper.
+The build also applies `patches/dwarfs-0.15.7-extraction-names.patch` to reject
+unsafe stored filename components on every extraction path. The package includes
+both patches beside the original DwarFS source archive.
+
 Fedora builds target release 45 and default to the host CPU architecture. The
 supported Fedora architectures are x86-64 and ARM64; CI builds and installs
 both. `FEDORA_RELEASE` and `FEDORA_ARCH` are explicit automation overrides, not

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "imagehistory.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
@@ -16,10 +17,7 @@ namespace dwarfsctl_tray {
 // Keep tray state (like recently mounted items) in a user-friendly config file.
 inline QString traySettingsPath()
 {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    const QString dir = QDir(base).filePath(QStringLiteral("dwarfsctl"));
-    QDir().mkpath(dir);
-    return QDir(dir).filePath(QStringLiteral("tray.ini"));
+    return dwarfsctl_kde::imageHistoryPath();
 }
 
 inline QSettings traySettings()
@@ -29,63 +27,21 @@ inline QSettings traySettings()
 
 inline bool advancedUserEnabled()
 {
-    QSettings s = traySettings();
-    return s.value(QStringLiteral("ui/advanced-user"), false).toBool();
+    dwarfsctl_kde::image_history_detail::FreshSettings fresh(traySettingsPath());
+    return fresh.get() && fresh.get()->value(QStringLiteral("ui/advanced-user"), false).toBool();
 }
 
-inline void setAdvancedUserEnabled(bool enabled)
+inline bool setAdvancedUserEnabled(bool enabled)
 {
-    QSettings s = traySettings();
-    s.setValue(QStringLiteral("ui/advanced-user"), enabled);
-    s.sync();
+    return dwarfsctl_kde::image_history_detail::edit([enabled](dwarfsctl_kde::image_history_detail::SettingsValues &settings) {
+        settings.setValue(QStringLiteral("ui/advanced-user"), enabled);
+    });
 }
 
-inline int recentlyMountedLimit()
-{
-    QSettings s = traySettings();
-    const int v = s.value(QStringLiteral("recent/limit"), 5).toInt();
-    if (v < 0)
-        return 0;
-    if (v > 9)
-        return 9;
-    return v;
-}
-
-inline void setRecentlyMountedLimit(int limit)
-{
-    if (limit < 0)
-        limit = 0;
-    if (limit > 9)
-        limit = 9;
-
-    QSettings s = traySettings();
-    s.setValue(QStringLiteral("recent/limit"), limit);
-
-    // Enforce the new limit immediately.
-    if (limit == 0) {
-        s.remove(QStringLiteral("recent/images"));
-    } else {
-        QStringList imgs = s.value(QStringLiteral("recent/images")).toStringList();
-        if (imgs.size() > limit) {
-            imgs = imgs.mid(0, limit);
-            s.setValue(QStringLiteral("recent/images"), imgs);
-        }
-    }
-    s.sync();
-}
-
-inline QStringList recentlyMountedImages()
-{
-    QSettings s = traySettings();
-    return s.value(QStringLiteral("recent/images")).toStringList();
-}
-
-inline void clearRecentlyMountedImages()
-{
-    QSettings s = traySettings();
-    s.remove(QStringLiteral("recent/images"));
-    s.sync();
-}
+inline int recentlyMountedLimit() { return dwarfsctl_kde::recentImageLimit(); }
+inline void setRecentlyMountedLimit(int limit) { (void)dwarfsctl_kde::setRecentImageLimit(limit); }
+inline QStringList recentlyMountedImages() { return dwarfsctl_kde::recentImages(); }
+inline bool clearRecentlyMountedImages() { return dwarfsctl_kde::clearRecentImages(); }
 
 inline QString canonicalOrOriginal(const QString& path)
 {
@@ -117,21 +73,7 @@ inline QString recentLabelForImage(const QString& imagePath)
 
 inline void recordRecentlyMountedImage(const QString& imagePath)
 {
-    const int limit = recentlyMountedLimit();
-    if (limit <= 0)
-        return;
-
-    QSettings s = traySettings();
-    const QString canon = canonicalOrOriginal(imagePath);
-
-    QStringList imgs = s.value(QStringLiteral("recent/images")).toStringList();
-    imgs.removeAll(canon);
-    imgs.prepend(canon);
-    if (imgs.size() > limit) {
-        imgs = imgs.mid(0, limit);
-    }
-    s.setValue(QStringLiteral("recent/images"), imgs);
-    s.sync();
+    (void)dwarfsctl_kde::rememberImage(imagePath);
 }
 
 } // namespace dwarfsctl_tray

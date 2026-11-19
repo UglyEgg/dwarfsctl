@@ -17,6 +17,8 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings)
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../common)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets DBus)
 find_package(KF6CoreAddons REQUIRED)
 find_package(KF6I18n REQUIRED)
@@ -35,8 +37,15 @@ set(TRAY_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../tray/src")
 add_library(dwarfsctl-manager-ui STATIC
     src/managerwindow.cpp
     src/managerwindow.h
+    src/imagebrowserwidget.cpp
+    src/imagebrowserwidget.h
+    ${PLUGIN_SRC}/extractionfeedback.cpp
+    ${PLUGIN_SRC}/extractionfeedback.h
+    ../common/operationstatus.cpp
+    ../common/operationstatus.h
     src/visualizationwidgets.cpp
     src/visualizationwidgets.h
+    ${PLUGIN_SRC}/backendquery.h
     ${PLUGIN_SRC}/bannerwidget.cpp
     ${PLUGIN_SRC}/builddialog.cpp
     ${PLUGIN_SRC}/buildfeedback.cpp
@@ -45,7 +54,7 @@ add_library(dwarfsctl-manager-ui STATIC
     ${PLUGIN_SRC}/dwarfsctljob.cpp
     ${PLUGIN_SRC}/dwarfsctljson.cpp
     ${PLUGIN_SRC}/dwarfsctlmodel.cpp
-    ${PLUGIN_SRC}/dwarfsctlrunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common/dwarfsctlrunner.cpp
     ${PLUGIN_SRC}/envelopetext.cpp
     ${PLUGIN_SRC}/integritycheckdialog.cpp
     ${PLUGIN_SRC}/logging.cpp
@@ -54,7 +63,7 @@ add_library(dwarfsctl-manager-ui STATIC
     ${PLUGIN_SRC}/profileeditordialog.cpp
     ${PLUGIN_SRC}/recommendation.cpp
     ${PLUGIN_SRC}/trayagentjob.cpp
-    ${PLUGIN_SRC}/warnings.cpp
+
     ${TRAY_SRC}/settingsdialog.cpp
 )
 set_target_properties(dwarfsctl-manager-ui PROPERTIES AUTOMOC ON)
@@ -86,10 +95,30 @@ if(BUILD_TESTING)
     enable_testing()
     add_executable(tst_manager_window tests/tst_manager_window.cpp)
     target_link_libraries(tst_manager_window PRIVATE dwarfsctl-manager-ui Qt6::Test)
-    add_test(NAME tst_manager_window COMMAND tst_manager_window)
+    find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session REQUIRED)
+    set(MANAGER_TEST_HOME "${CMAKE_CURRENT_BINARY_DIR}/manager-test-home")
+    file(MAKE_DIRECTORY "${MANAGER_TEST_HOME}" "${MANAGER_TEST_HOME}/runtime")
+    file(CHMOD "${MANAGER_TEST_HOME}" "${MANAGER_TEST_HOME}/runtime"
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+    set(MANAGER_TEST_BUS "${CMAKE_CURRENT_BINARY_DIR}/manager-test-bus.conf")
+    file(WRITE "${MANAGER_TEST_BUS}" "<busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen><auth>EXTERNAL</auth><policy context='default'><allow own='*'/><allow send_destination='*'/><allow receive_sender='*'/></policy></busconfig>")
+    add_test(NAME tst_manager_window COMMAND ${CMAKE_COMMAND} -E env
+        --unset=DBUS_SESSION_BUS_ADDRESS
+        "HOME=${MANAGER_TEST_HOME}" "XDG_CONFIG_HOME=${MANAGER_TEST_HOME}/config"
+        "XDG_DATA_HOME=${MANAGER_TEST_HOME}/data" "XDG_CACHE_HOME=${MANAGER_TEST_HOME}/cache"
+        "XDG_STATE_HOME=${MANAGER_TEST_HOME}/state" "XDG_RUNTIME_DIR=${MANAGER_TEST_HOME}/runtime"
+        "DWARFSCTL_TEST_PRIVATE_BUS=1" "QT_QPA_PLATFORM=offscreen"
+        ${DBUS_RUN_SESSION_EXECUTABLE} --config-file=${MANAGER_TEST_BUS} -- $<TARGET_FILE:tst_manager_window>)
+    set_tests_properties(tst_manager_window PROPERTIES TIMEOUT 45)
+    add_executable(tst_imagebrowserwidget tests/tst_imagebrowserwidget.cpp)
+    target_link_libraries(tst_imagebrowserwidget PRIVATE dwarfsctl-manager-ui Qt6::Test)
+    add_test(NAME tst_imagebrowserwidget COMMAND tst_imagebrowserwidget)
+    add_executable(tst_extractionfeedback tests/tst_extractionfeedback.cpp)
+    target_link_libraries(tst_extractionfeedback PRIVATE dwarfsctl-manager-ui Qt6::Test)
+    add_test(NAME tst_extractionfeedback COMMAND tst_extractionfeedback)
     set(MANAGER_TEST_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/test-config")
     file(MAKE_DIRECTORY "${MANAGER_TEST_CONFIG}")
-    set_tests_properties(tst_manager_window PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${MANAGER_TEST_CONFIG}"
+    set_tests_properties(tst_imagebrowserwidget tst_extractionfeedback PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${MANAGER_TEST_CONFIG};DBUS_SESSION_BUS_ADDRESS=unix:path=${CMAKE_CURRENT_BINARY_DIR}/no-session-bus"
         TIMEOUT 30)
 endif()
