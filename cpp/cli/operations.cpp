@@ -103,14 +103,20 @@ public:
   explicit CopyStaging(fs::path const &parent) : directory(parent) {
     const char *value = std::getenv("DWARFSCTL_COPY_STAGING_DIR");
     if (!value) return;
+    const fs::path rawPath(value);
+    if (!rawPath.is_absolute())
+      throw Error(2, "copy staging must be a private, owned sibling directory");
     struct stat info {}, parentInfo {};
-    std::error_code parentError, stagingError;
+    std::error_code parentError, stagingError, pathError;
     const auto canonicalParent = fs::canonical(parent, parentError);
-    const auto stagingParent = fs::canonical(fs::path(value).parent_path(), stagingError);
-    fd = ::open(value, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const auto stagingParent = fs::canonical(rawPath.parent_path(), stagingError);
+    const auto canonicalPath = fs::canonical(rawPath, pathError);
+    if (parentError || stagingError || pathError || stagingParent != canonicalParent)
+      throw Error(2, "copy staging must be a private, owned sibling directory");
+    fd = ::open(canonicalPath.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0 || ::fstat(fd, &info) != 0 || ::stat(parent.c_str(), &parentInfo) != 0 ||
         info.st_uid != ::geteuid() || (info.st_mode & 077) != 0 ||
-        info.st_dev != parentInfo.st_dev || parentError || stagingError || stagingParent != canonicalParent) {
+        info.st_dev != parentInfo.st_dev) {
       if (fd >= 0) ::close(fd);
       fd = -1;
       throw Error(2, "copy staging must be a private, owned sibling directory");
