@@ -48,12 +48,12 @@ path and contents.
 
 Screenshots show DwarFSctl 0.13.1 with a sample image containing project
 documentation, artwork and source files, rendered with KDE's Breeze style.
-The development version adds Files and renames Contents to Size Map.
+Version 0.14.0 adds Files and renames Contents to Size Map.
 
 ## Install
 
-Version 0.13.1 is available. Downloads are verified using a GPG-signed checksum
-manifest.
+Downloads are covered by a GPG-signed checksum manifest. The Fedora RPMs also
+carry package signatures.
 
 Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,
 Ubuntu 26.04 and Arch Linux on x86-64.
