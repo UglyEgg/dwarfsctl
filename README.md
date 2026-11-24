@@ -13,8 +13,8 @@
 
 DwarFSctl brings compressed filesystem images to the KDE desktop. Open **DwarFS
 Utility**, the standalone app, to create images, inspect their contents, compare
-compression, mount volumes and extract files. Its visual Contents view helps you
-explore what takes up space inside an image.
+compression, mount volumes and extract files. The Files view lets you browse
+and select items to extract; Size Map shows what takes up space.
 
 The same tools are available directly in Dolphin, with file previews, an image
 Properties page and mounted volumes in Places. A Plasma tray application gives
@@ -36,18 +36,24 @@ the Dolphin integration. Open **DwarFS Utility** from your application launcher.
 
 ![DwarFS Utility showing image size, compression savings and image details](docs/screenshots/utility-overview.png)
 
-Switch to **Contents** to explore the image's folders by size. Point to a ring
-to see its path and contents.
+Use **Files** to browse folders without mounting the image. Select files or
+folders, then choose **Extract Selected…**. Choose **Extract All…** for the whole
+image. Both actions create a new folder inside your chosen destination and keep
+the original folder paths; existing folders are never overwritten.
+
+Switch to **Size Map** to explore folders by size. Point to a ring to see its
+path and contents.
 
 ![DwarFS Utility showing the Content Rings view](docs/screenshots/utility-contents.png)
 
 Screenshots show DwarFSctl 0.13.1 with a sample image containing project
 documentation, artwork and source files, rendered with KDE's Breeze style.
+Version 0.14.0 adds Files and renames Contents to Size Map.
 
 ## Install
 
-Version 0.13.1 is available. Downloads are verified using a GPG-signed checksum
-manifest.
+Downloads are covered by a GPG-signed checksum manifest. The Fedora RPMs also
+carry package signatures.
 
 Release packages target Fedora 45 on x86-64 and ARM64, plus Debian 13,
 Ubuntu 26.04 and Arch Linux on x86-64.
@@ -82,7 +88,19 @@ In Dolphin:
 
 Open **DwarFS Utility** from the application launcher when you want to inspect
 or manage several images in one place. Its Overview compares the original and
-compressed sizes; Contents shows a bounded visual map of the image hierarchy.
+compressed sizes; Files supports browsing and selective extraction; Size Map
+shows a bounded visual map of the image hierarchy.
+
+Utility and the tray share recent-image history and its limit in Settings.
+Turning history off keeps currently open images usable. Unavailable images stay
+in the list with **Locate Image…**; **Show Image in Folder** reveals the source
+file. Removing entries or clearing history never deletes images or unmounts
+volumes.
+
+Creation, extraction and checks show progress and elapsed time in their own
+window. Cancel waits for cleanup before reporting cancellation; closing the
+window requests cancellation and waits before closing. Mount operations show
+their result but cannot be cancelled once dispatched.
 
 The command-line interface exposes the same engine for scripts:
 
@@ -91,6 +109,8 @@ dwarfsctl build ./folder --output ./archive.dwarfs
 dwarfsctl status ./archive.dwarfs
 dwarfsctl mount ./archive.dwarfs
 dwarfsctl extract ./archive.dwarfs ./restored
+# Extract just one folder, keeping its archive-relative path:
+dwarfsctl extract ./archive.dwarfs ./selected --path /Documents
 dwarfsctl unmount ./archive.dwarfs
 ```
 
@@ -148,5 +168,12 @@ Report vulnerabilities through GitHub's private
 DwarFSctl is licensed under GPL-3.0-or-later. Packages include the corresponding
 application and pinned DwarFS source, along with third-party notices. See
 [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Use of AI
+
+I lead the engineering work on DwarFSctl and make the design and release
+decisions. I use AI coding assistants to help write and review code, develop
+tests, and draft documentation. I decide what ships and take responsibility for
+each release.
 
 Copyright © 2026 Richard Majewski · Varanid Works.

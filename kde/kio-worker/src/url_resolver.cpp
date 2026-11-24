@@ -4,6 +4,7 @@
 #include "url_resolver.h"
 
 #include <QStringList>
+#include <QFileInfo>
 
 namespace DwarfsKio {
 
@@ -55,6 +56,10 @@ ResolvedUrl resolve(const QUrl &url)
     int imageIndex = -1;
     for (int i = 0; i < parts.size(); ++i) {
         if (parts.at(i).endsWith(QLatin1String(kSuffix), Qt::CaseInsensitive)) {
+            const QString candidate = QLatin1Char('/') + parts.mid(0, i + 1).join(QLatin1Char('/'));
+            // A real containing directory may also have this suffix. Once an
+            // image file is found, later suffixes belong to its inner paths.
+            if (QFileInfo(candidate).isDir()) continue;
             imageIndex = i;
             break;
         }

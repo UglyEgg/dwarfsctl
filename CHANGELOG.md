@@ -2,6 +2,56 @@
 
 This file records release changes.
 
+## 0.14.0
+
+- Kept mount status consistent across Utility, Dolphin and the command line,
+  including recovery when the tray restarts or a status request cannot complete.
+- Made cancellation and mount-service checks responsive, preserved completed
+  results during late cancellation, and cleaned up interrupted Dolphin copies.
+- Improved browsing of large images with targeted metadata queries, a bounded
+  listing cache and a lighter file-list model.
+- Validated stored filenames on every extraction path before writing files,
+  rejected options that change the requested operation, and preserved
+  destination-conflict information for Dolphin's copy handling.
+
+- Recovered interrupted mount registration after a tray restart and stopped
+  transient mount launchers when the tray exits.
+- Fixed unmounting after the source image is deleted, prevented default mount
+  name collisions, and supported image filenames at the filesystem name limit.
+- Refused to reuse a mounted image after its source file changes, preserving the
+  existing volume and explaining when unmounting and mounting again is needed.
+
+- Waited for owned worker cleanup before reporting completion, failure or
+  cancellation, and distinguished a runtime crash from a failure to start.
+- Required a real output file before offering creation success or Show in Folder.
+- Fixed recent-history settings becoming stale after preference-file replacement,
+  and preserved malformed preferences instead of silently rewriting them.
+- Fixed Dolphin browsing through folders whose names end in `.dwarfs`, and
+  invalidated cached listings when the source image changes.
+
+- Shared recent-image history between Utility and the tray, with one recent
+  limit and Off setting. Existing lists are merged automatically.
+- Kept unavailable images visible with a Locate action, and preserved access to
+  mounted volumes when their source image is moved or removed.
+- Distinguished open images from recent history, added Show Image in Folder,
+  and clarified that removing entries never deletes files or unmounts volumes.
+
+- Unified progress, elapsed time, cancellation and results across image creation,
+  extraction, integrity checks and checksums. Failures stay in the operation
+  window with optional details.
+- Let a measured creation preview become the finished image with one click,
+  without recompressing it. Closing the preview discards the temporary image.
+- Kept the tray responsive during its mount actions and removed misleading
+  cancellation from mount-service requests. Mount timeouts now explain that the
+  outcome is unconfirmed.
+
+- Added a Files tab to DwarFS Utility for browsing image folders and extracting
+  selected files or folders without mounting the image.
+- Renamed Contents to Size Map and preserved the previously selected view.
+- Added extraction cancellation and completion feedback, with a direct action
+  to open the extracted folder. Extraction keeps the original folder paths and
+  publishes into a new folder without overwriting an existing destination.
+
 ## 0.13.1 — 2026-11-15
 
 - Aligned Utility and tray styling, improved theme contrast, and kept image

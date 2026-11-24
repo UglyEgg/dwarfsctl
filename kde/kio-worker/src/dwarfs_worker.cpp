@@ -149,12 +149,27 @@ KIO::WorkerResult DwarfsWorker::stat(const QUrl &url)
         return KIO::WorkerResult::fail(KIO::ERR_MALFORMED_URL, resolved.error);
     }
 
-    // The image itself: report the local file's own stat, so Dolphin shows a real
-    // size and type for the .dwarfs file rather than a synthesised directory.
+    // The protocol root describes the backing image file. URL syntax alone
+    // does not establish that it exists; report only measured local metadata.
     if (resolved.innerPath == QLatin1String("/")) {
+        struct stat info {};
+        const auto path = QFile::encodeName(resolved.imagePath);
+        if (::stat(path.constData(), &info) != 0) {
+            const int reason = errno;
+            const int code = reason == ENOENT || reason == ENOTDIR ? KIO::ERR_DOES_NOT_EXIST
+                : reason == EACCES || reason == EPERM ? KIO::ERR_ACCESS_DENIED : KIO::ERR_CANNOT_STAT;
+            return KIO::WorkerResult::fail(code,
+                i18n("Could not inspect image %1: %2", resolved.imagePath,
+                    QString::fromLocal8Bit(std::strerror(reason))));
+        }
+        if (!S_ISREG(info.st_mode))
+            return KIO::WorkerResult::fail(S_ISDIR(info.st_mode) ? KIO::ERR_IS_DIRECTORY : KIO::ERR_CANNOT_STAT,
+                i18n("The image path is not a regular file: %1", resolved.imagePath));
         KIO::UDSEntry uds;
         uds.fastInsert(KIO::UDSEntry::UDS_NAME, QUrl::fromLocalFile(resolved.imagePath).fileName());
         uds.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, S_IFREG);
+        uds.fastInsert(KIO::UDSEntry::UDS_SIZE, info.st_size);
+        uds.fastInsert(KIO::UDSEntry::UDS_ACCESS, info.st_mode & 07777);
         uds.fastInsert(KIO::UDSEntry::UDS_URL, url.toString());
         statEntry(uds);
         return KIO::WorkerResult::pass();
@@ -163,8 +178,7 @@ KIO::WorkerResult DwarfsWorker::stat(const QUrl &url)
     // Resolving one path must not re-list the whole image: this is on the hot
     // path for a directory browse, where Dolphin issues one listDir followed by a
     // stat() per entry. lookupEntry serves a warm cache outright and narrows to
-    // `ls --path ... --entry-only` on a cold one (review finding F4: ~323 ms of
-    // repeated full listings for an 80-file directory).
+    // `ls --path ... --entry-only` on a cold one.
     const ListResult result = lookupEntry(resolved.imagePath, resolved.innerPath);
     if (!result.ok) {
         return backendFailure(result, url);

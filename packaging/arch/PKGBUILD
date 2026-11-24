@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Package the payload produced and tested by packaging/build-all.sh on Arch.
 pkgname=dwarfs-dolphin
-pkgver=0.13.1
+pkgver=0.14.0
 pkgrel=1
 pkgdesc='DwarFS Utility and native KDE Plasma/Dolphin image integration'
 arch=('x86_64')

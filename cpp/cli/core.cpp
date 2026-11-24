@@ -14,7 +14,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <sys/file.h>
 #include <unistd.h>
 namespace ctl {
 namespace {
@@ -100,6 +99,45 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
     proc.setWorkingDirectory(qs(cwd->string()));
   if (output)
     proc.setStandardOutputFile(qs(output->string()), QIODevice::Truncate);
+  QByteArray capturedOutput, capturedError, pending;
+  qint64 outputBytes = 0, errorBytes = 0;
+  constexpr qsizetype diagnosticLimit = 64 * 1024;
+  const bool building = !args.empty() && args[0] == "mkdwarfs" &&
+                        std::find(args.begin(), args.end(), "-i") != args.end();
+  const bool structured = program == engine_path() && !args.empty() &&
+      (args[0] == "inspect" || args[0] == "ls" || args[0] == "version" ||
+       (args[0] == "dwarfsck" && std::find(args.begin(), args.end(), "--json") != args.end()) ||
+       (args[0] == "mkdwarfs" && std::find(args.begin(), args.end(), "--long-help") != args.end()));
+  auto drainOutput = [&] {
+    auto chunk = proc.readAllStandardOutput(); outputBytes += chunk.size();
+    if (structured) capturedOutput += chunk;
+    else if (capturedOutput.size() < diagnosticLimit)
+      capturedOutput += chunk.left(diagnosticLimit - capturedOutput.size());
+  };
+  std::string phase;
+  auto drainError = [&] {
+    auto chunk = proc.readAllStandardError(); errorBytes += chunk.size();
+    if (capturedError.size() < diagnosticLimit)
+      capturedError += chunk.left(diagnosticLimit - capturedError.size());
+    if (building) {
+      pending += chunk;
+      int newline;
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        const auto line = pending.left(newline); pending.remove(0, newline + 1);
+        std::string next;
+        if (line.contains("scanning ")) next = "scanning";
+        else if (line.contains("building blocks") || line.contains("compression to finish") || line.contains("segmenting/blockifying")) next = "compressing";
+        else if (line.contains("saving ") || line.contains("building metadata")) next = "metadata";
+        if (!next.empty() && next != phase) {
+          phase = next;
+          std::cerr << J({{"event", "build_progress"}, {"phase", phase}}).dump() << std::endl;
+        }
+      }
+      if (pending.size() > diagnosticLimit) pending.remove(0, pending.size() - diagnosticLimit);
+    }
+  };
+  QObject::connect(&proc, &QProcess::readyReadStandardOutput, drainOutput);
+  QObject::connect(&proc, &QProcess::readyReadStandardError, drainError);
   proc.start();
   if (!proc.waitForStarted())
     throw Error(3,
@@ -107,10 +145,6 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
   // QProcess drains both channels while waiting, avoiding pipe deadlocks. File
   // output bypasses memory capture for large cat/checksum operations.
   const pid_t engine_group = owns_session ? ::getpgrp() : static_cast<pid_t>(proc.processId());
-  QByteArray capturedError, pending;
-  std::string phase;
-  const bool building = !args.empty() && args[0] == "mkdwarfs" &&
-                        std::find(args.begin(), args.end(), "-i") != args.end();
   do {
     proc.waitForFinished(100);
     if (cancellation_signal) {
@@ -124,34 +158,12 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
       }
       cancellation_point(); // unwind staging files and locks on the normal thread
     }
-    auto chunk = proc.readAllStandardError();
-    capturedError += chunk;
-    if (building) {
-      pending += chunk;
-      int newline;
-      while ((newline = pending.indexOf('\n')) >= 0) {
-        auto line = pending.left(newline);
-        pending.remove(0, newline + 1);
-        std::string next;
-        if (line.contains("scanning "))
-          next = "scanning";
-        else if (line.contains("building blocks") ||
-                 line.contains("compression to finish") ||
-                 line.contains("segmenting/blockifying"))
-          next = "compressing";
-        else if (line.contains("saving ") || line.contains("building metadata"))
-          next = "metadata";
-        if (!next.empty() && next != phase) {
-          phase = next;
-          std::cerr << J({{"event", "build_progress"}, {"phase", phase}}).dump()
-                    << std::endl;
-        }
-      }
-    }
   } while (proc.state() != QProcess::NotRunning);
+  drainOutput();
+  drainError();
   cancellation_point();
   Run result{proc.exitStatus() == QProcess::NormalExit ? proc.exitCode() : 9,
-             proc.readAllStandardOutput(), capturedError, J::object()};
+             capturedOutput, capturedError, J::object()};
   std::vector<std::string> full{program};
   full.insert(full.end(), args.begin(), args.end());
   result.payload = {{"tool", args.empty() ? program : args[0]},
@@ -161,9 +173,9 @@ Run execute(std::string const &program, std::vector<std::string> const &args,
     result.payload["stdout"] = str(QString::fromUtf8(result.out.left(8192)));
   if (!result.err.isEmpty())
     result.payload["stderr"] = str(QString::fromUtf8(result.err.left(8192)));
-  if (result.out.size() > 8192)
+  if (outputBytes > 8192)
     result.payload["stdout_truncated"] = true;
-  if (result.err.size() > 8192)
+  if (errorBytes > 8192)
     result.payload["stderr_truncated"] = true;
   if (proc.exitStatus() != QProcess::NormalExit)
     result.payload["termination"] = "engine process crashed";
@@ -204,9 +216,11 @@ void publish(fs::path const &staged, fs::path const &dest, bool overwrite) {
   // rename() atomically replaces the directory entry, including symlinks.
   int rc = overwrite ? ::rename(staged.c_str(), dest.c_str())
                      : ::link(staged.c_str(), dest.c_str());
-  if (rc != 0)
-    throw Error(errno == EEXIST ? 4 : 9, "cannot publish " + dest.string() +
-                                             ": " + std::strerror(errno));
+  if (rc != 0) {
+    const int error = errno;
+    throw Error(error == EEXIST ? 4 : 9, "cannot publish " + dest.string() + ": " + std::strerror(error),
+                {{"reason", error == EEXIST ? "destination_exists" : "publication_failed"}, {"errno", error}});
+  }
 }
 void atomic_write(fs::path const &path, std::string const &data) {
   fs::create_directories(path.parent_path());
@@ -220,18 +234,11 @@ void atomic_write(fs::path const &path, std::string const &data) {
 }
 Lock::Lock(fs::path const &path) {
   fs::create_directories(path.parent_path());
-  fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-  if (fd < 0)
-    throw Error(9, "cannot open lock " + path.string());
-  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
-    ::close(fd);
-    fd = -1;
+  const int error = lock.acquire(path.c_str());
+  if (error == EWOULDBLOCK)
     throw Error(5, "operation lock busy: " + path.string());
-  }
-}
-Lock::~Lock() {
-  if (fd >= 0)
-    ::close(fd);
+  if (error)
+    throw Error(9, "cannot open lock " + path.string() + ": " + std::strerror(error));
 }
 J envelope(std::string const &cmd, J const &image, J const &details,
            J const &warnings, Error const *error) {

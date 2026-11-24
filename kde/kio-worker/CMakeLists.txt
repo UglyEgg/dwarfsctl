@@ -25,6 +25,7 @@ include(KDECMakeSettings)
 include(KDECompilerSettings)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Test)
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/../common")
 
 # Many distros (including Arch) ship no top-level KF6Config.cmake; use the
 # per-framework configs, as the rest of kde/ does.
@@ -76,7 +77,7 @@ target_link_libraries(dwarfs PRIVATE
 # Both suites avoid I/O where it does not change what is being tested, so they run
 # on any machine -- including CI, which has no DwarFS tools:
 #
-#   tst_url_resolver  pure logic; no KIO, no process execution.
+#   tst_url_resolver  URL parsing plus local directory checks; no KIO/processes.
 #   tst_dwarfsctl_ls  parses recorded backend envelopes; runs no process.
 #
 # A third suite that drives real images belongs here only behind the

@@ -7,11 +7,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
-#include <QProcess>
 #include <QString>
-#include <QStringList>
 
 #include <limits>
+#include <cmath>
 
 namespace dwarfsctl_kde {
 
@@ -30,25 +29,10 @@ struct UiConfig {
 
     bool open_after_mount = true;
 
-    /// True when these values came from the backend. False means the backend
-    /// could not be asked and the values above are the documented defaults,
-    /// so the UI still works without a reachable backend.
+    /// Only validated backend values may enable a configured GUI action.
+    /// Default construction is unresolved, not a successful settings load.
     bool from_backend = false;
 };
-
-/// Convert a millisecond value as the config carries it into Qt's timeout
-/// convention: 0 and below mean "no timeout" (-1), and anything past what Qt
-/// accepts is clamped rather than wrapped.
-inline int configMsToQtTimeout(qint64 ms)
-{
-    if (ms <= 0) {
-        return -1;
-    }
-    if (ms > std::numeric_limits<int>::max()) {
-        return std::numeric_limits<int>::max();
-    }
-    return static_cast<int>(ms);
-}
 
 /// Parse the envelope of `dwarfsctl config show --section ui` into `*out`.
 ///
@@ -87,56 +71,23 @@ inline bool parseUiConfig(const QByteArray &envelope_json, UiConfig *out)
         return false;
     }
 
+    const double command = command_value.toDouble();
+    const double build = build_value.toDouble();
+    if (!std::isfinite(command) || !std::isfinite(build)
+        || std::trunc(command) != command || std::trunc(build) != build
+        || command < 0 || build < 0) return false;
+    // Clamp before converting: JSON numbers can exceed even qint64.
+    const auto timeout = [](double value) {
+        return value == 0 ? -1 : value >= std::numeric_limits<int>::max()
+            ? std::numeric_limits<int>::max() : static_cast<int>(value);
+    };
     UiConfig parsed;
-    parsed.command_timeout_ms = configMsToQtTimeout(static_cast<qint64>(command_value.toDouble()));
-    parsed.build_timeout_ms = configMsToQtTimeout(static_cast<qint64>(build_value.toDouble()));
+    parsed.command_timeout_ms = timeout(command);
+    parsed.build_timeout_ms = timeout(build);
     parsed.open_after_mount = open_value.toBool();
     parsed.from_backend = true;
     *out = parsed;
     return true;
-}
-
-/// Ask the backend for the resolved `[ui]` values.
-///
-/// `program` is the resolved dwarfsctl to run; callers already resolve it
-/// (including the DWARFSCTL_BIN override), so program lookup has one owner.
-/// The query is bounded and is made per call rather than cached: a config
-/// edit takes effect on the next action instead of requiring a Dolphin or
-/// tray restart, which is the behavior these front ends had when they read
-/// the file directly. On any failure the defaults above apply with
-/// `from_backend == false`.
-inline UiConfig loadUiConfig(const QString &program)
-{
-    UiConfig cfg; // defaults, from_backend == false
-
-    if (program.trimmed().isEmpty()) {
-        return cfg;
-    }
-
-    QProcess p;
-    p.setProgram(program);
-    p.setArguments({QStringLiteral("config"),
-                    QStringLiteral("show"),
-                    QStringLiteral("--section"),
-                    QStringLiteral("ui")});
-    p.start();
-    if (!p.waitForStarted(5000)) {
-        return cfg;
-    }
-    if (!p.waitForFinished(5000)) {
-        p.kill();
-        p.waitForFinished(1000);
-        return cfg;
-    }
-    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
-        return cfg;
-    }
-
-    UiConfig parsed;
-    if (!parseUiConfig(p.readAllStandardOutput(), &parsed)) {
-        return cfg;
-    }
-    return parsed;
 }
 
 } // namespace dwarfsctl_kde

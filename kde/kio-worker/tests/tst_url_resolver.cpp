@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tests for the dwarfs: URL split. These run with no KIO and no DwarFS tools
-// installed, because the rules here are pure logic and the failure modes that
-// matter (traversal, ambiguity, encoding) are all decidable without I/O.
+// installed. URL rules need no backend; a local directory fixture also verifies
+// that a containing folder ending in .dwarfs is not treated as the image.
 
 #include "url_resolver.h"
+#include <QTemporaryDir>
+#include <QDir>
+#include <QFile>
 
 #include <QTest>
 
@@ -17,6 +20,20 @@ class UrlResolverTest : public QObject
 
 private Q_SLOTS:
     // --- the happy paths ---------------------------------------------------
+
+    void containingDirectoryWithImageSuffixIsNotAnImage()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QVERIFY(QDir(root.path()).mkdir(QStringLiteral("collection.dwarfs")));
+        const auto image = root.filePath(QStringLiteral("collection.dwarfs/actual.dwarfs"));
+        QFile file(image);
+        QVERIFY(file.open(QIODevice::WriteOnly)); file.write("image"); file.close();
+        const auto result = resolve(toUrl(image, QStringLiteral("/nested.dwarfs/file.txt")));
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(result.imagePath, image);
+        QCOMPARE(result.innerPath, QStringLiteral("/nested.dwarfs/file.txt"));
+    }
 
     void splitsImageFromInnerPath()
     {

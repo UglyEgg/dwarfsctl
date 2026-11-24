@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='dwarfsctl-cpp-') as tmp:
     runtime = root / 'run'
     runtime.mkdir(mode=0o700)
     env = dict(os.environ, HOME=tmp, XDG_CONFIG_HOME=str(root/'config'), XDG_CACHE_HOME=str(root/'cache'),
-               XDG_RUNTIME_DIR=str(runtime), XDG_DATA_HOME=str(root/'data'), PATH='/nonexistent', DWARFSCTL_ENGINE=engine)
+               XDG_RUNTIME_DIR=str(runtime), XDG_DATA_HOME=str(root/'data'), PATH='/nonexistent', DWARFSCTL_ENGINE=engine, DBUS_SESSION_BUS_ADDRESS='unix:path='+str(root/'absent-bus'))
     config = root/'override.toml'
     config.write_text('[ui]\nopen_after_mount=true\n')
 
@@ -96,9 +96,72 @@ with tempfile.TemporaryDirectory(prefix='dwarfsctl-cpp-') as tmp:
     img=root/'image.dwarfs'
     args=('build',src,'--output',img,'--mkdwarfs-arg=--compress-level=1')
     plan=run(*args,'--dry-run');assert plan['output_verified'] and not img.exists()
+    run(*args,'--dry-run','--preview',code=2)
+    measured=run(*args,'--preview')
+    assert not measured['output_verified'] and measured['preview_verified']
+    assert measured['summary']['preview'] and measured['summary']['image_bytes']>0
+    assert measured['summary']['files']==14 and measured['summary']['original_bytes']>0
+    assert any(row['type']=='.txt' and row['files']>=13 for row in measured['summary']['source_types'])
+    assert sum(row['files'] for row in measured['summary']['source_types'])==14
+    assert sum(row['original_bytes'] for row in measured['summary']['source_types'])==measured['summary']['original_bytes']
+    assert not img.exists() and not list(root.glob('.dwarfsctl-*'))
+    with tempfile.TemporaryDirectory(prefix='.dwarfsctl-preview-', dir=root) as stage_name:
+        stage=Path(stage_name)
+        stage.chmod(0o1700)
+        stale=root/'.dwarfsctl-preview-stale1'
+        active=root/'.dwarfsctl-preview-active'
+        unmarked=root/'.dwarfsctl-preview-old123'
+        for sibling in (stale, active, unmarked):
+            sibling.mkdir(mode=0o700)
+            (sibling/'candidate.dwarfs').write_bytes(b'temporary')
+        stale.chmod(0o1700)
+        (stale/'.dwarfsctl-123456').write_bytes(b'interrupted build')
+        active.chmod(0o1700)
+        directory_fd=os.open(active, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(directory_fd, fcntl.LOCK_SH)
+            run(*args,'--preview','--preview-stage',stage)
+            assert not stale.exists()
+            assert (active/'candidate.dwarfs').is_file()
+            assert (unmarked/'candidate.dwarfs').is_file()
+        finally:
+            os.close(directory_fd)
+        retained=run(*args,'--preview','--preview-stage',stage)
+        assert not active.exists()
+        (unmarked/'candidate.dwarfs').unlink()
+        unmarked.rmdir()
+        candidate=Path(retained['preview_candidate'])
+        assert candidate==stage/'candidate.dwarfs'
+        assert candidate.is_file() and candidate.stat().st_size==retained['summary']['image_bytes']
+        assert not img.exists()
+        run('build',src,'--output',img,'--publish-preview',candidate,
+            '--expected-size',candidate.stat().st_size+1,code=4)
+        assert not img.exists()
+        published=run('build',src,'--output',img,'--publish-preview',candidate,
+                      '--expected-size',candidate.stat().st_size)
+        assert published['published_preview'] and published['output_verified']
+        assert img.stat().st_size==retained['summary']['image_bytes']
+        assert os.stat(img).st_ino==os.stat(candidate).st_ino
+    assert img.is_file() and not stage.exists()
+    nested_destination=src/'sub[1]*'
+    nested_destination.mkdir()
+    with tempfile.TemporaryDirectory(prefix='.dwarfsctl-preview-', dir=nested_destination) as stage_name:
+        stage=Path(stage_name)
+        stage.chmod(0o1700)
+        nested=run('build',src,'--output',nested_destination/'image.dwarfs',
+                   '--preview','--preview-stage',stage)
+        assert nested['summary']['files']==14, nested['summary']
+    nested_destination.rmdir()
+    run('build',src,'--output',img,'--preview-stage',root,code=2)
+    run('build',src,'--output',img,'--publish-preview',root/'missing',code=2)
+    img.unlink()
     built=run(*args);assert built['output_verified'] and img.stat().st_size>0
     assert built['summary']['files']==14 and built['summary']['image_bytes']==img.stat().st_size
     assert built['summary']['original_bytes']>0 and built['summary']['elapsed_ms']>=0
+    before=hashlib.sha256(img.read_bytes()).hexdigest()
+    repeated=run(*args,'--preview')
+    assert repeated['summary']['preview'] and hashlib.sha256(img.read_bytes()).hexdigest()==before
+    assert not list(root.glob('.dwarfsctl-*'))
     # Forced publication replaces the requested symlink, never its target.
     build_victim=root/'build-victim';build_victim.write_bytes(b'keep')
     build_link=root/'build-link.dwarfs';build_link.symlink_to(build_victim)
@@ -147,7 +210,10 @@ with tempfile.TemporaryDirectory(prefix='dwarfsctl-cpp-') as tmp:
     run(*args,'--force','--mkdwarfs-arg=--compression=not-real',code=2)
     assert img.read_bytes()==before
     run(*args,'--overwrite-output')
-    assert run('status',img)['dwarfsck']['json']
+    status=run('status',img)
+    assert status['dwarfsck']['json']
+    assert status['mount_state_known'] is False and 'mounted' not in status
+    assert status['mountpoint'] is None
     assert run('status')['deps']['mkdwarfs']['found']
     run('fsck',img)
     checksums=root/'checksums.sha256'
@@ -179,6 +245,7 @@ with tempfile.TemporaryDirectory(prefix='dwarfsctl-cpp-') as tmp:
     for goal in ('smallest','balanced','fastest-browse','fast-build'):
         rec=run('mkdwarfs','recommend',src,'--goal',goal,'--cache','off')
         assert rec['schema']=='dwarfsctl.recommend.v1' and rec['goal']==goal and not rec['cache_hit']
+        assert rec['recommendation']['notes'] and not rec['recommendation']['warnings']
         output=root/(goal+'.dwarfs')
         run('build',src,'--output',output,*[f'--mkdwarfs-arg={flag}' for flag in rec['recommendation']['flags_only']])
         run('fsck',output)

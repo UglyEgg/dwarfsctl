@@ -5,7 +5,7 @@
 //
 // A URL is:  dwarfs:///absolute/path/to/image.dwarfs[/inner/path]
 //
-// The image path ends at the first path component ending in `.dwarfs`; everything
+// The image path ends at the first non-directory component ending in `.dwarfs`; everything
 // after it is a path INSIDE the image. This split has to happen before any I/O,
 // because the inner path is attacker-influenced (it comes from a URL) and must
 // not be able to escape the image.

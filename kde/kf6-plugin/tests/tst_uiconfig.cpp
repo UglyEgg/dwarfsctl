@@ -1,19 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Richard Majewski
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Tests for the shared `[ui]` reader.
-//
-// WHY THIS EXISTS. The Dolphin plugin and the tray used to open
-// /etc/dwarfs-dolphin/config.toml and ~/.config/dwarfs-dolphin/config.toml
-// themselves and hand-parse the `[ui]` keys. That made each front end a second
-// implementation of config precedence, environment expansion and defaults --
-// two parsers that would disagree with dwarfsctl the first time any of the
-// three changed. They now read the resolved values from
-// `dwarfsctl config show --section ui`, and this suite pins the envelope
-// contract they rely on: all three keys, right types, Qt timeout convention.
-//
-// It is pure JSON handling: no backend, no widgets, no /dev/fuse, so it runs
-// anywhere including CI.
+// Strict resolved `[ui]` envelope contract: backend-owned precedence,
+// expansion and defaults; validated types and Qt timeout conversion.
 
 #include "uiconfig.h"
 
@@ -121,6 +110,21 @@ private Q_SLOTS:
         }
     }
 
+    void numericContractIsValidatedBeforeConversion()
+    {
+        for (const auto &number : {"1.5", "-1"}) {
+            UiConfig out;
+            QVERIFY(!parseUiConfig(envelope(QStringLiteral(
+                "{\"open_after_mount\":true,\"command_timeout_ms\":%1,\"build_timeout_ms\":0}")
+                .arg(QString::fromLatin1(number))), &out));
+            QVERIFY(!out.from_backend);
+        }
+        UiConfig out;
+        QVERIFY(parseUiConfig(envelope(QStringLiteral(
+            "{\"open_after_mount\":true,\"command_timeout_ms\":1e300,\"build_timeout_ms\":0}")), &out));
+        QCOMPARE(out.command_timeout_ms, std::numeric_limits<int>::max());
+    }
+
     void nonObjectPayloadsAreRejected()
     {
         UiConfig out;
@@ -131,8 +135,7 @@ private Q_SLOTS:
         QVERIFY(!out.from_backend);
     }
 
-    /// The defaults are the documented ones, so an unreachable backend leaves
-    /// the UI working exactly as a fresh install behaves.
+    /// Default construction does not authorize configured GUI actions.
     void defaultsMatchTheDocumentedValues()
     {
         const UiConfig out;

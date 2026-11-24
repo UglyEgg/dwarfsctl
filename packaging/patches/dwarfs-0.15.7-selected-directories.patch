@@ -1,0 +1,31 @@
+--- a/include/dwarfs/utility/filesystem_extractor.h
++++ b/include/dwarfs/utility/filesystem_extractor.h
+@@ -60,6 +60,7 @@
+   bool enable_progress{false};
+   bool skip_devices{false};
+   bool skip_specials{false};
++  bool include_matching_directories{false};
+ };
+ 
+ class filesystem_extractor {
+--- a/src/utility/filesystem_extractor.cpp
++++ b/src/utility/filesystem_extractor.cpp
+@@ -613,7 +613,17 @@
+     // we descend into them during the extraction walk below.
+     fs.walk([&](auto entry) {
+       auto inode = entry.inode();
+-      if (!inode.is_directory()) {
++      if (inode.is_directory() && opts.include_matching_directories &&
++          matcher->match(entry.unix_path())) {
++        ++match_count;
++        matched_dirs.insert(entry.unix_path());
++        while (auto parent = entry.parent()) {
++          if (!matched_dirs.insert(parent->unix_path()).second) {
++            break;
++          }
++          entry = *parent;
++        }
++      } else if (!inode.is_directory()) {
+         if (matcher->match(entry.unix_path())) {
+           ++match_count;
+ 

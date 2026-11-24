@@ -7,6 +7,7 @@ struct Recommendation {
     bool valid = false;
     QStringList flags;
     QStringList reasons;
+    QStringList notes;
     QStringList warnings;
     QString confidence;
 };

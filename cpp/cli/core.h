@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "../common/operation_file_lock.h"
 #include <QString>
 #include <QStringList>
 #include <filesystem>
@@ -79,10 +80,10 @@ struct Temp {
   Temp(Temp const &) = delete;
 };
 struct Lock {
-  int fd = -1;
   explicit Lock(fs::path const &path);
-  ~Lock();
   Lock(Lock const &) = delete;
+private:
+  dwarfsctl::OperationFileLock lock;
 };
 J envelope(std::string const &, J const &image, J const &details,
            J const &warnings = J::array(), Error const *error = nullptr);

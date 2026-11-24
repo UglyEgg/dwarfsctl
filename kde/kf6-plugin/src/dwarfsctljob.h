@@ -16,9 +16,12 @@
 
 namespace dwarfsplugin {
 
+class OwnedJobProcess;
+
 class DwarfsctlJob final : public KJob {
     Q_OBJECT
 public:
+    enum class OutputFormat { Json, Text };
     struct Request {
         QString title;
         QStringList args;
@@ -26,6 +29,8 @@ public:
         // Background refreshes (for example, a manager selection changing)
         // should not create a progress dialog for a quick status query.
         bool show_ui = true;
+        OutputFormat outputFormat = OutputFormat::Json;
+        qsizetype responseLimit = 0;
     };
 
     explicit DwarfsctlJob(Request req, QObject *parent = nullptr);
@@ -36,19 +41,30 @@ public:
     QString errorString() const override;
 
     Envelope envelope() const;
+    QString textOutput() const;
 
 Q_SIGNALS:
     void buildPhase(const QString &phase);
 
 private:
-    bool stopOwnedProcess();
+    void readOutput(QProcess::ProcessChannel channel);
+    bool captureOutput(QByteArray &target, const QByteArray &bytes);
+    bool m_responseExceeded = false;
+    void initializeProcess(const QString &resource);
+    void completeAfterCleanup();
+    bool m_started = false;
+    void resolveOutput(int exitCode, const ParseResult &parsed);
+    void finishWhenStopped();
+    bool m_terminalPending = false;
+    bool m_resultEmitted = false;
     bool m_stopping = false;
-    qint64 m_processGroup = 0;
+    bool m_cancelRequested = false;
+    OwnedJobProcess *m_owned = nullptr;
     Request m_req;
     QString m_errorString;
     Envelope m_envelope;
     bool m_hasEnvelope = false;
-    QProcess m_proc;
+    QProcess *m_proc = nullptr;
     QTimer m_timeout;
     QByteArray m_stdout;
     QByteArray m_stderr;

@@ -34,6 +34,7 @@ chown -R root:root %{buildroot}
 /usr/bin/*
 /usr/libexec/dwarfsctl-engine
 /usr/lib*/qt6/plugins/*
+/usr/lib/systemd/user/*
 /usr/share/*
 %config(noreplace) /etc/dwarfs-dolphin/config.toml
 /etc/xdg/autostart/dwarfsctl-tray.desktop

@@ -17,9 +17,7 @@ struct BuildDialogResult {
     QStringList profileArgs; // resolved args for selected profile
 
     bool force = false;
-    bool overwriteOutput = false;
-    bool yes = false;
-    bool dryRun = false;
+    bool preview = false;
 };
 
 // Prompt for build options when the user selects "Build" on a directory.
