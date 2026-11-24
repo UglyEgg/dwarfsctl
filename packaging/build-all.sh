@@ -39,6 +39,10 @@ install -Dm644 kde/mime/packages/application-x-dwarfs.xml "$stage/usr/share/mime
 install -Dm644 packaging/etc/dwarfs-dolphin/config.toml "$stage/etc/dwarfs-dolphin/config.toml"
 install -Dm644 kde/tray/dwarfsctl-tray.desktop "$stage/usr/share/applications/dwarfsctl-tray.desktop"
 install -Dm644 kde/tray/dwarfsctl-tray.desktop "$stage/etc/xdg/autostart/dwarfsctl-tray.desktop"
+# Match the unit name produced by systemd-xdg-autostart-generator.
+tray_autostart='app-dwarfsctl\x2dtray@autostart.service'
+install -Dm644 kde/tray/autostart-mount-lifetime.conf \
+  "$stage/usr/lib/systemd/user/$tray_autostart.d/10-mount-lifetime.conf"
 mkdir -p "$stage/usr/share/dbus-1/services"
 sed 's|@EXEC@|/usr/bin/dwarfsctl-tray|g' kde/tray/org.quest.entropy.dwarfsctl.Tray.service.in > "$stage/usr/share/dbus-1/services/org.quest.entropy.dwarfsctl.Tray.service"
 install -Dm644 LICENSE "$stage/usr/share/licenses/dwarfsctl/LICENSE"
