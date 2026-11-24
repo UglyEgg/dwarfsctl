@@ -5,8 +5,8 @@ repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build=${1:?usage: build-reader.sh BUILD_DIR [STAGING_DIR]}
 mkdir -p "$build"
 build=$(cd -- "$build" && pwd)
-version=0.15.7
-sha=363c7fdbf7bad490a6b8d63186da8643c1aeb17ca54cce1193d7b0ebc57bc6bd
+version=0.15.10
+sha=036109bc210b5afa593a005f798918aacdd412a3d9dbf703bed2e70477454027
 archive="$build/dwarfs-$version.tar.xz"
 if [[ ! -f "$archive" ]]; then
     curl --fail --location --retry 3 -o "$archive.part" \

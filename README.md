@@ -135,7 +135,7 @@ Confirm your package appears in the checksum output with `OK`.
 ## What is included
 
 - `dwarfsctl`, the public CLI and configuration service
-- a private engine built from pinned DwarFS 0.15.7 source
+- a private engine built from pinned DwarFS 0.15.10 source
 - Dolphin file actions and a Properties page
 - read-only `dwarfs:` browsing through KIO
 - a Plasma tray application and D-Bus mount service

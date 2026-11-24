@@ -9,7 +9,7 @@ KDE integration, packaging, and visual identity.
 
 **DwarFS** was created by
 [Marcus Holland-Moritz and contributors](https://github.com/mhx/dwarfs).
-DwarFSctl builds and ships checksum-pinned DwarFS 0.15.7 libraries.
+DwarFSctl builds and ships checksum-pinned DwarFS 0.15.10 libraries.
 
 **Qt 6, KDE Frameworks 6, Plasma, and Dolphin** provide the native desktop
 platform.

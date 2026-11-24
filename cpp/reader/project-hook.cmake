@@ -8,7 +8,7 @@ cmake_language(DEFER CALL include "${DWARFSCTL_READER_SOURCE}/CMakeLists.txt")
 # Enforce stored-name containment in the extractor shared by every entry point.
 # A strict reverse check makes repeated configure safe without accepting drift.
 find_program(DWARFSCTL_PATCH_PROGRAM patch REQUIRED)
-set(DWARFSCTL_EXTRACTION_PATCH "${DWARFSCTL_READER_SOURCE}/../../packaging/patches/dwarfs-0.15.7-extraction-names.patch")
+set(DWARFSCTL_EXTRACTION_PATCH "${DWARFSCTL_READER_SOURCE}/../../packaging/patches/dwarfs-0.15.10-extraction-names.patch")
 execute_process(COMMAND "${DWARFSCTL_PATCH_PROGRAM}" --dry-run --silent --fuzz=0 --forward -p1
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" INPUT_FILE "${DWARFSCTL_EXTRACTION_PATCH}"
   RESULT_VARIABLE DWARFSCTL_EXTRACTION_PATCH_STATUS OUTPUT_QUIET ERROR_QUIET)

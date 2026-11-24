@@ -1,6 +1,6 @@
 # Third-party notices
 
-The private C++ engine embeds checksum-pinned DwarFS 0.15.7. Its exact release
+The private C++ engine embeds checksum-pinned DwarFS 0.15.10. Its exact release
 source archive and the local extractor patches are shipped in
 `/usr/share/dwarfsctl/sources/`; copyright and
 license texts are in `/usr/share/licenses/dwarfsctl/`. See

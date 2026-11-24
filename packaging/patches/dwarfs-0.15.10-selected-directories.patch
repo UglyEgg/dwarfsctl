@@ -10,7 +10,7 @@
  class filesystem_extractor {
 --- a/src/utility/filesystem_extractor.cpp
 +++ b/src/utility/filesystem_extractor.cpp
-@@ -613,7 +613,17 @@
+@@ -634,7 +634,17 @@
      // we descend into them during the extraction walk below.
      fs.walk([&](auto entry) {
        auto inode = entry.inode();

@@ -10,7 +10,8 @@ import sys
 import tempfile
 from selected_extract_contracts import check_selected_extraction
 
-cli, reader, mkdwarfs, dwarfsck = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
+cli, reader, mkdwarfs, dwarfsck, dwarfsextract = map(
+    lambda p: str(Path(p).resolve()), sys.argv[1:])
 with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
     root = Path(temporary)
     src = root / "source"
@@ -20,8 +21,17 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
                "sub/[abc].bin": bytes(range(256)) * 8193}
     for name, data in content.items():
         (src / name).write_bytes(data)
-    for i in range(110):
-        (src / f"entry-{i:03}.txt").write_text(f"{i}\n")
+    entries = {f"entry-{i:03}.txt": f"{i}\n".encode() for i in range(110)}
+    for name, data in entries.items():
+        (src / name).write_bytes(data)
+    # Include an initial hole and data beyond it to exercise sparse readahead
+    # and extraction order. Check logical bytes independently of output layout.
+    hole_size = 1024 * 1024
+    sparse_tail = b"sparse tail\n"
+    with (src / "sparse.bin").open("wb") as sparse:
+        sparse.seek(hole_size)
+        sparse.write(sparse_tail)
+    content["sparse.bin"] = bytes(hole_size) + sparse_tail
     os.symlink("hello.txt", src / "link")
     os.link(src / "hello.txt", src / "hardlink")
     image = root / "test.dwarfs"
@@ -83,12 +93,35 @@ with tempfile.TemporaryDirectory(prefix="dwarfsctl-reader-") as temporary:
     assert dangling.is_symlink()
     run("cat", image, "/hello.txt", dangling, "--force")
     assert not dangling.is_symlink() and dangling.read_bytes() == b"hello\n"
+    def check_extracted(dest):
+        assert {p.relative_to(dest) for p in dest.rglob("*")} == {
+            p.relative_to(src) for p in src.rglob("*")
+        }
+        for name, data in (content | entries).items():
+            assert (dest / name).read_bytes() == data, name
+        assert os.readlink(dest / "link") == "hello.txt"
+        assert (dest / "hardlink").stat().st_ino == (dest / "hello.txt").stat().st_ino
+
+    # Previous upstream writer -> currently packaged reader.
     dest = root / "extract"
     run("extract", image, dest)
-    for name, data in content.items():
-        assert (dest / name).read_bytes() == data
-    assert os.readlink(dest / "link") == "hello.txt"
-    assert (dest / "hardlink").stat().st_ino == (dest / "hello.txt").stat().st_ino
+    check_extracted(dest)
+    selected = root / "selected-sparse"
+    run("extract", image, selected, "--path", "/sparse.bin")
+    assert {p.name for p in selected.iterdir()} == {"sparse.bin"}
+    assert (selected / "sparse.bin").read_bytes() == content["sparse.bin"]
+
+    # Currently packaged writer -> previous upstream integrity check and reader.
+    new_image = root / "current.dwarfs"
+    run("build", src, "--output", new_image, "--mkdwarfs-arg=--compress-level=1")
+    subprocess.run([dwarfsck, "--check-integrity", "-i", str(new_image)], check=True,
+                   capture_output=True)
+    old_dest = root / "extract-with-previous"
+    old_dest.mkdir()
+    subprocess.run([dwarfsextract, "-i", str(new_image), "-o", str(old_dest)],
+                   check=True, capture_output=True)
+    check_extracted(old_dest)
+    print("bidirectional image compatibility passed: full extraction, sparse bytes, hardlinks and symlinks")
     # A pre-existing output symlink must never redirect writes outside dest.
     outside = root / "outside"
     outside.mkdir()

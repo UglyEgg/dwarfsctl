@@ -2,6 +2,12 @@
 
 This file records release changes.
 
+## 0.14.1
+
+- Updated the bundled DwarFS engine to 0.15.10, including fixes for extraction
+  memory use on sparse images and cleanup when closing an archive fails.
+- Kept existing DwarFS image compatibility and selected-directory extraction.
+
 ## 0.14.0
 
 - Kept mount status consistent across Utility, Dolphin and the command line,

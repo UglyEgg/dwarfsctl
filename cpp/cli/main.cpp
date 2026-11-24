@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     else if (in.command == "mkdwarfs schema") {
       result = {{"supported_mkdwarfs_version",
                  schema()["supported_mkdwarfs_version"]},
-                {"installed_mkdwarfs_version", "0.15.7"},
+                {"installed_mkdwarfs_version", schema()["supported_mkdwarfs_version"]},
                 {"schema", schema()}};
       if (in.has("include-long-help")) {
         auto r = engine("mkdwarfs", {"--long-help"});
