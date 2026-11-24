@@ -169,4 +169,11 @@ DwarFSctl is licensed under GPL-3.0-or-later. Packages include the corresponding
 application and pinned DwarFS source, along with third-party notices. See
 [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+## Use of AI
+
+I lead the engineering work on DwarFSctl and make the design and release
+decisions. I use AI coding assistants to help write and review code, develop
+tests, and draft documentation. I decide what ships and take responsibility for
+each release.
+
 Copyright © 2026 Richard Majewski · Varanid Works.
