@@ -14,7 +14,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <sys/file.h>
 #include <unistd.h>
 namespace ctl {
 namespace {
@@ -235,18 +234,11 @@ void atomic_write(fs::path const &path, std::string const &data) {
 }
 Lock::Lock(fs::path const &path) {
   fs::create_directories(path.parent_path());
-  fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-  if (fd < 0)
-    throw Error(9, "cannot open lock " + path.string());
-  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
-    ::close(fd);
-    fd = -1;
+  const int error = lock.acquire(path.c_str());
+  if (error == EWOULDBLOCK)
     throw Error(5, "operation lock busy: " + path.string());
-  }
-}
-Lock::~Lock() {
-  if (fd >= 0)
-    ::close(fd);
+  if (error)
+    throw Error(9, "cannot open lock " + path.string() + ": " + std::strerror(error));
 }
 J envelope(std::string const &cmd, J const &image, J const &details,
            J const &warnings, Error const *error) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mount_executor.h"
+#include "../../../cpp/common/operation_file_lock.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -158,7 +159,8 @@ private Q_SLOTS:
         writeFile(registry, original);
         const auto lockDir = home->filePath("runtime/dwarfs/locks"); QVERIFY(QDir().mkpath(lockDir));
         const auto hash = QCryptographicHash::hash(QFileInfo(image).canonicalFilePath().toUtf8(), QCryptographicHash::Sha256).toHex();
-        QLockFile launch(QDir(lockDir).filePath(QString::fromLatin1(hash) + ".lock")); QVERIFY(launch.tryLock());
+        const auto path = QDir(lockDir).filePath(QString::fromLatin1(hash) + ".lock");
+        dwarfsctl::OperationFileLock launch; QCOMPARE(launch.acquire(QFile::encodeName(path).constData()), 0);
         const auto result = QJsonDocument::fromJson(MountExecutor(nullptr).unmountByMountpoint(point)).object();
         QCOMPARE(result.value("ok"), QJsonValue(false));
         QCOMPARE(result.value("error").toObject().value("kind").toString(), QString("Busy"));
@@ -218,8 +220,9 @@ private Q_SLOTS:
         writeFile(registry, QJsonDocument(QJsonObject{{"mounts", QJsonArray{row}}}).toJson());
         const auto locks = home->filePath("runtime/dwarfs/locks"); QVERIFY(QDir().mkpath(locks));
         const auto key = QCryptographicHash::hash(image.toUtf8(), QCryptographicHash::Sha256).toHex();
-        QLockFile authority(locks + "/" + QString::fromLatin1(key) + ".lock");
-        QVERIFY(authority.tryLock());
+        const auto path = locks + "/" + QString::fromLatin1(key) + ".lock";
+        dwarfsctl::OperationFileLock authority;
+        QCOMPARE(authority.acquire(QFile::encodeName(path).constData()), 0);
         auto result = std::async(std::launch::async, [point] { return MountExecutor(nullptr).unmountByMountpoint(point); });
         const auto blocked = result.wait_for(std::chrono::milliseconds(200));
         auto replacement = row; replacement.insert("mounted_at", 2);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "mount_executor.h"
+#include "../../../cpp/common/operation_file_lock.h"
 #include "mount_liveness.h"
 #include "traysettings.h"
 
@@ -449,9 +450,11 @@ QJsonArray usableRegistryMounts(bool removeDirectories, bool &cleaned,
         const auto directory = xdgRuntimeDir() + QStringLiteral("/dwarfs/locks");
         if (!QDir().mkpath(directory)) throw RegistryError(QStringLiteral("The mount operation lock directory could not be created."));
         const auto key = QCryptographicHash::hash(source.toUtf8(), QCryptographicHash::Sha256).toHex();
-        QLockFile authority(directory + QLatin1Char('/') + QString::fromLatin1(key) + QStringLiteral(".lock"));
-        authority.setStaleLockTime(60 * 1000);
-        if (!authority.tryLock(0)) throw RegistryError(QStringLiteral("Another operation is using this image. Refresh the mount state when it finishes."));
+        const auto path = QDir(directory).filePath(QString::fromLatin1(key) + QStringLiteral(".lock"));
+        dwarfsctl::OperationFileLock authority;
+        const int error = authority.acquire(QFile::encodeName(path).constData());
+        if (error == EWOULDBLOCK) throw RegistryError(QStringLiteral("Another operation is using this image. Refresh the mount state when it finishes."));
+        if (error) throw RegistryError(QStringLiteral("The image operation lock could not be opened (%1).").arg(error));
         {
             Registry registry;
             if (!registry.value.value(QStringLiteral("mounts")).toArray().contains(entry)) continue;
@@ -587,13 +590,14 @@ QByteArray MountExecutor::mount(const QString& imagePath) try
     }
     QDir().mkpath(ident.mountRoot);
     QDir().mkpath(ident.lockDir);
-    QLockFile lock(ident.lockPath);
-    lock.setStaleLockTime(60 * 1000);
-    if (!lock.tryLock(5000)) {
+    dwarfsctl::OperationFileLock lock;
+    const int lockError = lock.acquire(QFile::encodeName(ident.lockPath).constData(), std::chrono::seconds(5));
+    if (lockError == EWOULDBLOCK)
         return QJsonDocument(errEnvelope(QStringLiteral("mount"), imagePath, 1,
-            QStringLiteral("MountState"), QStringLiteral("failed to acquire mount lock (%1)")
-                .arg(lockErrorToString(lock.error())))).toJson(QJsonDocument::Indented);
-    }
+            QStringLiteral("Busy"), QStringLiteral("Another operation is using this image. Try again when it finishes."))).toJson();
+    if (lockError)
+        return QJsonDocument(errEnvelope(QStringLiteral("mount"), imagePath, 1,
+            QStringLiteral("MountState"), QStringLiteral("The image operation lock could not be opened (%1).").arg(lockError))).toJson();
 
     QJsonObject previous;
     {
@@ -774,11 +778,15 @@ static QByteArray doUnmountInternal(const QString& command, const QString& image
     const auto lockDirectory = xdgRuntimeDir() + QStringLiteral("/dwarfs/locks");
     if (!QDir().mkpath(lockDirectory)) throw RegistryError(QStringLiteral("The mount operation lock directory could not be created."));
     const auto hash = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha256).toHex();
-    QLockFile operationLock(QDir(lockDirectory).filePath(QString::fromLatin1(hash) + QStringLiteral(".lock")));
-    operationLock.setStaleLockTime(60 * 1000);
-    if (!operationLock.tryLock(5000))
+    const auto path = QDir(lockDirectory).filePath(QString::fromLatin1(hash) + QStringLiteral(".lock"));
+    dwarfsctl::OperationFileLock operationLock;
+    const int lockError = operationLock.acquire(QFile::encodeName(path).constData(), std::chrono::seconds(5));
+    if (lockError == EWOULDBLOCK)
         return QJsonDocument(errEnvelope(command, imagePath, 1, QStringLiteral("Busy"),
             QStringLiteral("Another operation is using this image. Try again when it finishes."))).toJson();
+    if (lockError)
+        return QJsonDocument(errEnvelope(command, imagePath, 1, QStringLiteral("MountState"),
+            QStringLiteral("The image operation lock could not be opened (%1).").arg(lockError))).toJson();
     // The row that selected this source must still own the point after the
     // shared launch lock is acquired. A registry row alone never authorizes
     // detaching an unrelated replacement filesystem.
