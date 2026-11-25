@@ -88,13 +88,14 @@ J mount_command(Input const &in) {
   return queryMountAgent(qs(method), args, 300000);
 }
 J diagnostics(Input const &in, Config const &) {
+  const auto pinnedVersion = schema().at("supported_mkdwarfs_version").get<std::string>();
   bool ready = false;
   std::string failure;
   try {
     auto result = engine("version", {});
     require_success(result);
     auto version = J::parse(result.out.toStdString());
-    ready = version["dwarfs"] == "0.15.7" && version["protocol"] == 1;
+    ready = version["dwarfs"] == pinnedVersion && version["protocol"] == 1;
     if (!ready)
       failure = "engine version mismatch";
   } catch (std::exception const &e) {
@@ -106,16 +107,16 @@ J diagnostics(Input const &in, Config const &) {
     tools.push_back({{"key", key},
                      {"found", ready},
                      {"path", engine_path()},
-                     {"installed_version", ready ? J("0.15.7") : J(nullptr)},
-                     {"supported_min", "0.15.7"},
-                     {"supported_max_tested", "0.15.7"}});
+                     {"installed_version", ready ? J(pinnedVersion) : J(nullptr)},
+                     {"supported_min", pinnedVersion},
+                     {"supported_max_tested", pinnedVersion}});
   }
   if (in.command == "tools schema")
     return {
         {"schema_version", 1},
         {"tools", tools},
-        {"supported_mkdwarfs_version", schema()["supported_mkdwarfs_version"]},
-        {"installed_mkdwarfs_version", ready ? J("0.15.7") : J(nullptr)}};
+        {"supported_mkdwarfs_version", pinnedVersion},
+        {"installed_mkdwarfs_version", ready ? J(pinnedVersion) : J(nullptr)}};
   if (in.command == "doctor") {
     J checks = J::array();
     for (auto const &key : {"mkdwarfs", "dwarfs", "dwarfsck", "dwarfsextract"})
@@ -130,7 +131,7 @@ J diagnostics(Input const &in, Config const &) {
          {"ok", ready},
          {"severity", ready ? "info" : "error"},
          {"summary",
-          ready ? "C++ engine with embedded DwarFS 0.15.7" : failure}});
+          ready ? "C++ engine with embedded DwarFS " + pinnedVersion : failure}});
     checks.push_back(
         {{"id", "fuse_device"},
          {"ok", ::access("/dev/fuse", R_OK | W_OK) == 0},

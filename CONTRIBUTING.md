@@ -86,7 +86,7 @@ are not release-signing keys.
 
 ## Source and licensing
 
-DwarFS 0.15.7 is downloaded from its upstream release using the checksum in the
+DwarFS 0.15.10 is downloaded from its upstream release using the checksum in the
 build scripts. Packages ship the exact source archive and applicable licenses.
 Changes to the pin require a source, license, image-compatibility and option-schema
 review.

@@ -198,7 +198,7 @@ for progressive_control in ['simpleCompressionLevel', 'exactSettingsSummary',
     assert progressive_control in profile_editor
 for retired_profile_gate in ['advancedUserToggle', 'profileModeStack']:
     assert retired_profile_gate not in profile_editor
-schema = json.loads(Path('resources/mkdwarfs_schema_v0_15_7.json').read_text())
+schema = json.loads(Path('resources/mkdwarfs_schema_v0_15_10.json').read_text())
 simple_controls = [
     option for category in schema['categories'] for option in category['options']
     if option.get('simple_control')

@@ -18,7 +18,7 @@ Release: 1%{?dist}
 Summary: Native DwarFS CLI and KDE integration
 License: GPL-3.0-or-later AND MIT AND BSL-1.0 AND Apache-2.0
 URL: https://github.com/UglyEgg/dwarfsctl
-Provides: bundled(dwarfs) = 0.15.7
+Provides: bundled(dwarfs) = 0.15.10
 Provides: dwarfsctl = $version
 Requires: fuse3, coreutils, shared-mime-info, desktop-file-utils, qt6-qtwayland, dbus-daemon
 Recommends: dolphin
@@ -92,4 +92,4 @@ CTRL
 fi
 
 bash "$(dirname "$0")/source-release.sh" "$out"
-cp "$stage/usr/share/dwarfsctl/sources/dwarfs-0.15.7.tar.xz" "$out/"
+cp "$stage/usr/share/dwarfsctl/sources/dwarfs-0.15.10.tar.xz" "$out/"

@@ -308,7 +308,7 @@ AboutDialog::AboutDialog(QWidget *parent)
         QStringLiteral("folder-compress"),
         i18n("DwarFS"),
         i18n("Created by <a href=\"https://github.com/mhx/dwarfs\">Marcus Holland-Moritz and contributors</a>. "
-             "DwarFSctl builds and ships checksum-pinned DwarFS 0.15.7 libraries."),
+             "DwarFSctl builds and ships checksum-pinned DwarFS 0.15.10 libraries."),
         foundationBox));
     foundationLayout->addWidget(separator(foundationBox));
     foundationLayout->addWidget(creditRow(

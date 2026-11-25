@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "supported_mkdwarfs_version": "0.15.7",
+  "supported_mkdwarfs_version": "0.15.10",
   "categories": [
     {
       "name": "Basics",

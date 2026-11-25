@@ -2,7 +2,7 @@
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core DBus)
 find_package(tomlplusplus REQUIRED)
 set(CTL_SOURCE "${CMAKE_CURRENT_LIST_DIR}")
-file(READ "${CTL_SOURCE}/../../resources/mkdwarfs_schema_v0_15_7.json" CTL_SCHEMA)
+file(READ "${CTL_SOURCE}/../../resources/mkdwarfs_schema_v0_15_10.json" CTL_SCHEMA)
 file(READ "${CTL_SOURCE}/../../packaging/etc/dwarfs-dolphin/config.toml" CTL_PROFILES)
 configure_file("${CTL_SOURCE}/resources.cpp.in" "${CMAKE_BINARY_DIR}/ctl-resources.cpp" @ONLY)
 add_executable(dwarfsctl

@@ -17,5 +17,5 @@ else
     (cd "$work"; PACKAGER='Richard Majewski <uglyegg@users.noreply.github.com>' makepkg --nodeps --noconfirm)
 fi
 find "$work" -maxdepth 1 -name '*.pkg.tar.zst' -exec cp '{}' "$out/" \;
-cp "$DWARFSCTL_STAGE/usr/share/dwarfsctl/sources/dwarfs-0.15.7.tar.xz" "$out/"
+cp "$DWARFSCTL_STAGE/usr/share/dwarfsctl/sources/dwarfs-0.15.10.tar.xz" "$out/"
 cp "$DWARFSCTL_STAGE/usr/share/dwarfsctl/sources/parallel-hashmap-2.0.0.tar.gz" "$out/"

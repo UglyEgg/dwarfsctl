@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='dwarfsctl-cpp-') as tmp:
     advertised={o['opt'] for c in schema['schema']['categories'] for o in c['options']}
     actual=set(re.findall(r'^  (?:-[A-Za-z] \[ )?(--[a-z][a-z-]+)',schema['mkdwarfs_long_help'],re.M))
     assert advertised == actual - {'--input','--output','--force','--help','--long-help','--man'}
-    assert schema['supported_mkdwarfs_version']=='0.15.7'
+    assert schema['supported_mkdwarfs_version']=='0.15.10'
     for name in ('@balanced','@fast','@max','@git'):
         flags=run(*profile,'get',name)['profile']['args']
         run('build',src,'--output',root/(name+'.dwarfs'),*[f'--mkdwarfs-arg={v}' for v in flags])

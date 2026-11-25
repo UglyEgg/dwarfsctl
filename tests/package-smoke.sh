@@ -82,7 +82,7 @@ esac
 test -f /usr/share/icons/hicolor/scalable/apps/dwarfsctl.svg
 grep -qx 'Icon=dwarfsctl' /usr/share/applications/dwarfsctl-tray.desktop
 test -f /usr/share/dbus-1/services/org.quest.entropy.dwarfsctl.Tray.service
-test -f /usr/share/dwarfsctl/sources/dwarfs-0.15.7.tar.xz
+test -f /usr/share/dwarfsctl/sources/dwarfs-0.15.10.tar.xz
 QT_QPA_PLATFORM=offscreen /usr/bin/dwarfsctl-thumbnailer "$test_home/test.dwarfs" "$test_home/thumbnail.png" 128
 test -s "$test_home/thumbnail.png"
 # A freshly activated authority may still be reconciling its registry. Busy is

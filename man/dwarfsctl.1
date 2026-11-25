@@ -1,4 +1,4 @@
-.TH DWARFSCTL 1 "2026-11-14" "dwarfsctl 0.14.0" "User Commands"
+.TH DWARFSCTL 1 "2026-11-24" "dwarfsctl 0.14.1" "User Commands"
 .SH NAME
 dwarfsctl \- JSON backend and KDE integration for DwarFS images
 .SH SYNOPSIS
@@ -266,7 +266,7 @@ metadata heuristics and cannot promise an optimal size or performance result.
 .BR sha256sum (1)
 
 .SH NATIVE ENGINE
-All image operations use a private C++ engine embedding pinned DwarFS 0.15.7.
+All image operations use a private C++ engine embedding pinned DwarFS 0.15.10.
 No external DwarFS tools or Rust runtime is required. The DWARFSCTL_ENGINE
 environment variable selects an explicit development engine executable.
 The default engine is found in libexec beside the installation's bin directory.
